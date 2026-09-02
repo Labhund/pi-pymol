@@ -60,6 +60,12 @@ Tools: `pymol_status`, `pymol_do`, `pymol_run`, `pymol_iterate`,
 
 ### Remote pairing (PyMOL on a laptop, pi over SSH/Tailscale)
 
+> **Requires [Tailscale](https://tailscale.com/) on both machines.** That is
+> the only supported remote transport — the bridge is a plain TCP socket
+> gated by a shared token, and Tailscale provides the private path. If you
+> need something else (SSH tunnel, plain LAN, public relay), please open an
+> issue or PR rather than expecting support.
+
 ```python
 # in PyMOL on the laptop (bind the tailnet IP — never 0.0.0.0 on shared
 # networks: the exec op is arbitrary code execution, token-gated)

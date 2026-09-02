@@ -1,3 +1,13 @@
+# Title: pi-pymol
+# Description: Let a pi agent session drive this PyMOL window: run commands,
+#   query structures, measure geometry, and share viewport screenshots.
+#   In this console:  pi_pymol_start          (local pairing)
+#                     pi_pymol_start remote   (over Tailscale; Tailscale
+#                     required on both machines)
+#   then run /pymol in the pi session and paste the printed line.
+# Version: 0.1.3
+# Author: Loo Lab (fork of Arcadia-Science/agentic-pymol, MIT)
+# License: MIT
 # pyright: reportMissingImports=false
 """
 pi-pymol PyMOL plugin: TCP server that accepts framed JSON requests from
@@ -59,7 +69,7 @@ LENGTH_HEADER = struct.Struct(">I")
 
 TOKEN_PATH = Path.home() / ".config" / "pi-pymol" / "token"
 PROTOCOL_VERSION = 1
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.3"
 TOKEN_BYTES = 32
 
 ITERATE_ROW_LIMIT = 200_000
