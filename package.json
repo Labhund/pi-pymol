@@ -1,14 +1,21 @@
 {
   "name": "pi-pymol",
-  "version": "0.1.1",
-  "description": "PyMOL as a tool of your pi agent session — typed tools, inline viewport images, explicit pairing. Forked from Arcadia-Science/agentic-pymol.",
-  "keywords": ["pi-package", "pymol", "structural-biology", "agent"],
+  "version": "0.1.2",
+  "description": "PyMOL as a tool of your pi agent session \u2014 typed tools, inline viewport images, explicit pairing. Forked from Arcadia-Science/agentic-pymol.",
+  "keywords": [
+    "pi-package",
+    "pymol",
+    "structural-biology",
+    "agent"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Labhund/pi-pymol.git"
   },
   "pi": {
-    "extensions": ["./extension/index.ts"]
+    "extensions": [
+      "./extension/index.ts"
+    ]
   }
 }

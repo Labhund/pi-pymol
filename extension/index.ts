@@ -71,7 +71,12 @@ export default function (pi: ExtensionAPI) {
 			"Pair this session with a live PyMOL bridge (/pymol to pick, /pymol <port>, or /pymol <host>:<port> for remote e.g. Tailscale)",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
-			const remote = arg.match(/^([\w.-]+):(\d+)$/); // host:port
+			const connect = arg.match(/^connect\s+([\w.-]+):(\d+):(.+)$/); // the one-paste line
+			if (connect) {
+				await pair(Number(connect[2]), ctx, connect[1], connect[3].trim());
+				return;
+			}
+			const remote = arg.match(/^([\w.-]+):(\d+)$/); // host:port (token via env or prompt)
 			if (remote) {
 				const host = remote[1];
 				const port = Number(remote[2]);
