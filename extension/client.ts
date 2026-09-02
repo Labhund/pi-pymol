@@ -129,21 +129,45 @@ export class PyMolClient {
 				),
 			);
 		}
+		// The timeout must cover connect() too: firewalled/Tailscale-dropped
+		// SYNs hang in kernel retry for ~2min otherwise, which froze agent
+		// sessions (2026-09-03). 5s is plenty for LAN and tailnet hops.
+		const connectTimeoutMs = Math.min(this.timeoutMs, 5_000);
 		return new Promise((resolve, reject) => {
 			const sock = net.createConnection({ host: this.host, port: this.port });
-			const fail = (err: Error) => {
+			let settled = false;
+			const fail = (err: PyMolError) => {
+				if (settled) return;
+				settled = true;
 				sock.destroy();
-				reject(
+				reject(err);
+			};
+			const timer = setTimeout(
+				() =>
+					fail(
+						new PyMolError(
+							"ConnectionTimeout",
+							`no response from ${this.host}:${this.port} within ${connectTimeoutMs / 1000}s — ` +
+								"the host is unreachable or a firewall is silently dropping the connection " +
+								"(check Tailscale status / macOS firewall on the PyMOL machine)",
+						),
+					),
+				connectTimeoutMs,
+			);
+			sock.once("error", (err: Error) => {
+				clearTimeout(timer);
+				fail(
 					new PyMolError(
 						"ConnectionError",
 						`could not connect to pi-pymol plugin at ${this.host}:${this.port} (${err.message}). ` +
 							"Is PyMOL running with the pi-pymol plugin listening?",
 					),
 				);
-			};
-			sock.once("error", fail);
+			});
 			sock.once("connect", () => {
-				sock.removeListener("error", fail);
+				clearTimeout(timer);
+				if (settled) return;
+				settled = true;
 				this.sock = sock;
 				resolve(sock);
 			});
