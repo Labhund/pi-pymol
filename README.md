@@ -43,6 +43,21 @@ Tools: `pymol_status`, `pymol_do`, `pymol_run`, `pymol_iterate`,
 `pymol_fasta`, `pymol_view`, `pymol_geometry`, `pymol_screenshot`,
 `pymol_render`.
 
+### Remote pairing (PyMOL on a laptop, pi over SSH/Tailscale)
+
+```python
+# in PyMOL on the laptop (bind the tailnet IP — never 0.0.0.0 on shared
+# networks: the exec op is arbitrary code execution, token-gated)
+pi_pymol_start port=0, host=100.x.y.z
+# → prints:  export PI_PYMOL_TOKEN=...
+```
+
+```bash
+# in the remote pi session
+export PI_PYMOL_TOKEN=...   # from the line above
+/pymol 100.x.y.z:42813      # or just /pymol host:port and paste at the prompt
+```
+
 ## Status
 
 Design phase. See [docs/design.md](docs/design.md) for the protocol, tool surface,

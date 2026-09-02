@@ -85,6 +85,19 @@ No auto-listen, no fixed port. Explicit pairing on both sides:
 - `SocketServer.start()` now binds synchronously so `pi_pymol_start` can
   read the bound port (upstream binds in the accept thread).
 
+## Remote pairing (v0.1.1, 2026-09-03) — PyMOL on a laptop, pi over SSH
+
+The bridge is a token-gated TCP socket, so it crosses Tailscale unchanged:
+
+- `pi_pymol_start port=0, host=<tailnet-ip>` on the laptop (NOT 0.0.0.0 on
+  shared networks — exec is arbitrary code execution, tailnet-only).
+- Non-loopback binds print an `export PI_PYMOL_TOKEN=...` line: paste it
+  into the remote pi session's shell (or enter it at the /pymol prompt).
+- `/pymol <host>:<port>` in pi pairs; `setTarget(host, port, token)`
+  overrides the local token file — the token lives on the PyMOL machine.
+- Session registry entries gain a `host` field; local listing unaffected
+  (remote sessions pair manually, they are not in the local registry).
+
 ## Modes of use
 
 - **Live session** (this desktop, `pymol` GUI running): interactive collaboration,

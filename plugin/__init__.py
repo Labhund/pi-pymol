@@ -495,11 +495,12 @@ class SocketServer:
 SESSIONS_DIR = Path.home() / ".config" / "pi-pymol" / "sessions"
 
 
-def _write_session_file(port: int) -> None:
+def _write_session_file(port: int, host: str = "127.0.0.1") -> None:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "pid": os.getpid(),
         "port": int(port),
+        "host": host,
         "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     (SESSIONS_DIR / f"{port}.json").write_text(json.dumps(payload))
@@ -514,15 +515,22 @@ def _remove_session_file(port: int) -> None:
 # CONSOLE COMMANDS (explicit pairing; pi_pymol_start binds a random free port)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pi_pymol_start(port: int = 0) -> None:
+def pi_pymol_start(port: int = 0, host: str = "") -> None:
     """Start the bridge on `port` (0 = pick a random free port) and register
-    the session file that `pymol /pymol` in a pi session discovers."""
+    the session file that `/pymol` in a pi session discovers.
+
+    host: bind address; default 127.0.0.1 (PI_PYMOL_HOST env overrides).
+    For remote pairing (e.g. over Tailscale) bind the tailnet IP, NEVER
+    0.0.0.0 on shared networks — the exec op is arbitrary code execution
+    gated only by the token. Non-loopback binds print an export line with
+    the token to paste into the remote pi session."""
     global socket_server, listening, current_port
     if listening:
         print(f"pi-pymol: already listening on port {current_port}")
         return
+    bind_host = str(host).strip() or os.environ.get("PI_PYMOL_HOST", "") or "127.0.0.1"
     try:
-        server = SocketServer(port=int(port))
+        server = SocketServer(host=bind_host, port=int(port))
         if not server.start():
             print("pi-pymol: failed to start (was it already started?)")
             return
@@ -532,9 +540,16 @@ def pi_pymol_start(port: int = 0) -> None:
     socket_server = server
     listening = True
     current_port = server.socket.getsockname()[1]
-    _write_session_file(current_port)
-    print(f"pi-pymol: listening on port {current_port}")
-    print("pi-pymol: in your pi session, run: /pymol")
+    _write_session_file(current_port, bind_host)
+    print(f"pi-pymol: listening on {bind_host}:{current_port}", flush=True)
+    if bind_host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"pi-pymol: on the remote pi machine run:", flush=True)
+        print(f"  export PI_PYMOL_TOKEN={get_token()}", flush=True)
+        print(f"  /pymol {bind_host}:{current_port}", flush=True)
+        print("pi-pymol: (the exec op is remote code execution — tailnet-only, "
+              "never 0.0.0.0 on shared networks)", flush=True)
+    else:
+        print("pi-pymol: in your pi session, run: /pymol", flush=True)
 
 
 def pi_pymol_stop() -> None:

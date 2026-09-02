@@ -95,12 +95,28 @@ export class PyMolClient {
 		this.helloInfo = null;
 		this.token = null;
 		this.port = null;
+		this.host = "127.0.0.1";
+	}
+
+	/**
+	 * Pair with a possibly-remote bridge (e.g. PyMOL on a MacBook over
+	 * Tailscale). `token` overrides the local token file — the token lives on
+	 * the machine PyMOL runs on, so remote pairing needs it pasted over.
+	 */
+	setTarget(host: string, port: number, token?: string): void {
+		this.close();
+		this.helloInfo = null;
+		this.token = token && token.trim() ? token.trim() : null;
+		this.host = host;
+		this.port = port;
 	}
 
 	private getToken(): string {
 		if (this.token === null) this.token = loadToken(process.env.PI_PYMOL_TOKEN);
 		return this.token;
 	}
+	// note: this.token set via setTarget() wins because getToken() only loads
+	// the file/env when this.token is null
 
 	private connect(): Promise<net.Socket> {
 		if (this.sock) return Promise.resolve(this.sock);

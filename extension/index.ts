@@ -67,9 +67,25 @@ function withHello<T>(fn: (args: Static<T>) => Promise<{ content: unknown[]; det
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("pymol", {
-		description: "Pair this session with a live PyMOL bridge (/pymol to pick, /pymol <port> direct)",
+		description:
+			"Pair this session with a live PyMOL bridge (/pymol to pick, /pymol <port>, or /pymol <host>:<port> for remote e.g. Tailscale)",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
+			const remote = arg.match(/^([\w.-]+):(\d+)$/); // host:port
+			if (remote) {
+				const host = remote[1];
+				const port = Number(remote[2]);
+				let token = process.env.PI_PYMOL_TOKEN?.trim();
+				if (!token) {
+					token = await ctx.ui.input(
+						"Bridge token",
+						`paste the PI_PYMOL_TOKEN printed by pi_pymol_start on ${host}`,
+					);
+				}
+				if (!token) return;
+				await pair(port, ctx, host, token);
+				return;
+			}
 			const direct = arg && Number(arg);
 			if (direct) {
 				await pair(Number(arg), ctx);
@@ -97,18 +113,24 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	async function pair(port: number, ctx: { ui: { notify(msg: string, kind?: string): void } }) {
-		client.setPort(port);
+	async function pair(
+		port: number,
+		ctx: { ui: { notify(msg: string, kind?: string): void; input(title: string, hint?: string): Promise<string | undefined> } },
+		host?: string,
+		token?: string,
+	) {
+		if (host) client.setTarget(host, port, token);
+		else client.setPort(port);
 		try {
 			const hello = await client.hello();
 			ctx.ui.notify(
-				`paired: PyMOL ${hello.pymol_version} on port ${port} (protocol ${hello.protocol})`,
+				`paired: PyMOL ${hello.pymol_version} on ${host ?? "127.0.0.1"}:${port} (protocol ${hello.protocol})`,
 				"info",
 			);
 		} catch (e) {
 			client.unpair();
 			const msg = e instanceof PyMolError ? `${e.type}: ${e.message}` : String(e);
-			ctx.ui.notify(`pairing failed on port ${port} — ${msg}`, "error");
+			ctx.ui.notify(`pairing failed on ${host ?? "127.0.0.1"}:${port} — ${msg}`, "error");
 		}
 	}
 
