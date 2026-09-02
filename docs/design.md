@@ -78,3 +78,25 @@ scratch + `read` (pi's `read` attaches images natively). Spike evidence so far:
   live PyMOL; verify inline tool-result images.
 - **S3:** full surface, tests ported/adapted from Arcadia, protocol handshake,
   skill drafts, promotion batch, GitHub publish.
+
+## Threading model of headless PyMOL (verified 2026-09-02, pymol 3.1.0)
+
+Learned the hard way during the S2 protocol tests; recorded because it
+shapes how the plugin may be used headless:
+
+- The PyMOL executive holds its global lock for the duration of a command;
+  worker-thread `cmd.*` calls (the plugin's dispatch model) are serviced
+  only when the executive idles.
+- A `time.sleep` loop in the run script does not idle the executive: the
+  first wedge (e.g. a fetch) blocks all subsequent ops.
+- `cmd.do("_")` pumps and `-R`'s xmlrpc loop both deadlock worse (lock
+  ping-pong with the worker).
+- `cmd.fetch` from a worker thread deadlocks headless even on an idle
+  executive (needs the GUI event loop); pre-fetch on the main thread during
+  script setup, or fetch in a GUI session.
+- The working headless configuration is `pymol -cpR -d "run ..."` with
+  stdin held open (`tail -f /dev/null |`): `-p` spawns a stdin-reader
+  thread, which keeps `_launch_no_gui`'s keep-alive loop running, and its
+  `p.draw()` idles the executive so plugin ops complete (get_names 0.00s).
+- `scripts/launch_headless.sh` encodes this; `run_server.py` pre-loads a
+  structure on the main thread for tests.
