@@ -69,6 +69,22 @@ gets undefined); prefer `cmd.*` API calls or `exec` over `cmd.do` from
 worker threads in GUI mode (a `do` crash surfaced as splitlines-on-None
 inside PyMOL).
 
+## Pairing model (v2, 2026-09-03)
+
+No auto-listen, no fixed port. Explicit pairing on both sides:
+
+- PyMOL: the plugin loads idle and defines console commands
+  `pi_pymol_start` (binds a random free port, writes
+  `~/.config/pi-pymol/sessions/<port>.json` with pid+port) and
+  `pi_pymol_stop`. Many PyMOL windows can expose themselves at once.
+- pi: `/pymol` command — lists live bridges (session files with live pids,
+  stale files cleaned), picks when unambiguous, prompts when not;
+  `/pymol <port>` connects directly. Pairing is per pi session: parallel
+  sessions can each hold a different PyMOL window.
+- Tools refuse with `NotPaired` until a session is paired.
+- `SocketServer.start()` now binds synchronously so `pi_pymol_start` can
+  read the bound port (upstream binds in the accept thread).
+
 ## Modes of use
 
 - **Live session** (this desktop, `pymol` GUI running): interactive collaboration,

@@ -44,8 +44,9 @@ import secrets
 import socket
 import struct
 import threading
+import time
 import traceback
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, suppress
 from pathlib import Path
 from typing import Any
 
@@ -420,6 +421,13 @@ class SocketServer:
         if self.running:
             return False
         get_token()
+        # Bind synchronously so callers can read getsockname() immediately
+        # after start() returns (the accept loop still runs in the thread).
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind((self.host, self.port))
+        self.socket.listen(4)
+        self.socket.settimeout(0.1)
         self.running = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -439,11 +447,6 @@ class SocketServer:
 
     def _run(self) -> None:
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((self.host, self.port))
-            self.socket.listen(4)
-            self.socket.settimeout(0.1)
             logger.info(f"pi-pymol socket server listening on {self.host}:{self.port}")
             while self.running:
                 try:
@@ -483,6 +486,75 @@ class SocketServer:
                 client.close()
             except OSError:
                 pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION REGISTRY (filesystem pairing between PyMOL and pi sessions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+SESSIONS_DIR = Path.home() / ".config" / "pi-pymol" / "sessions"
+
+
+def _write_session_file(port: int) -> None:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "port": int(port),
+        "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    (SESSIONS_DIR / f"{port}.json").write_text(json.dumps(payload))
+
+
+def _remove_session_file(port: int) -> None:
+    with suppress(OSError):
+        (SESSIONS_DIR / f"{port}.json").unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSOLE COMMANDS (explicit pairing; pi_pymol_start binds a random free port)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pi_pymol_start(port: int = 0) -> None:
+    """Start the bridge on `port` (0 = pick a random free port) and register
+    the session file that `pymol /pymol` in a pi session discovers."""
+    global socket_server, listening, current_port
+    if listening:
+        print(f"pi-pymol: already listening on port {current_port}")
+        return
+    try:
+        server = SocketServer(port=int(port))
+        if not server.start():
+            print("pi-pymol: failed to start (was it already started?)")
+            return
+    except OSError as e:
+        print(f"pi-pymol: failed to start ({e})")
+        return
+    socket_server = server
+    listening = True
+    current_port = server.socket.getsockname()[1]
+    _write_session_file(current_port)
+    print(f"pi-pymol: listening on port {current_port}")
+    print("pi-pymol: in your pi session, run: /pymol")
+
+
+def pi_pymol_stop() -> None:
+    global socket_server, listening, current_port
+    if socket_server:
+        socket_server.stop()
+    if listening:
+        _remove_session_file(current_port)
+    socket_server = None
+    listening = False
+    current_port = DEFAULT_PORT
+    print("pi-pymol: bridge stopped")
+
+
+try:
+    from pymol import cmd as _cmd_ext
+    _cmd_ext.extend("pi_pymol_start", pi_pymol_start)
+    _cmd_ext.extend("pi_pymol_stop", pi_pymol_stop)
+except Exception:
+    pass  # headless runners can still use SocketServer directly
 
 
 # ─────────────────────────────────────────────────────────────────────────────

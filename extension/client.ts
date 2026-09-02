@@ -15,7 +15,6 @@ import os from "node:os";
 import path from "node:path";
 
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
-const DEFAULT_PORT = 9877;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const TOKEN_PATH = path.join(os.homedir(), ".config", "pi-pymol", "token");
 
@@ -63,7 +62,7 @@ function loadToken(envToken: string | undefined): string {
 
 export class PyMolClient {
 	private host: string;
-	private port: number;
+	private port: number | null;
 	private timeoutMs: number;
 	private sock: net.Socket | null = null;
 	private token: string | null = null;
@@ -71,8 +70,31 @@ export class PyMolClient {
 
 	constructor(opts: { host?: string; port?: number; timeoutMs?: number } = {}) {
 		this.host = opts.host ?? "127.0.0.1";
-		this.port = opts.port ?? parsePortEnv() ?? DEFAULT_PORT;
+		// Explicit port (arg or PI_PYMOL_PORT env) pairs immediately; otherwise
+		// the client is unpaired until /pymol selects a PyMOL session.
+		const envPort = parsePortEnv();
+		this.port = opts.port ?? envPort ?? null;
 		this.timeoutMs = opts.timeoutMs ?? parseTimeoutEnv() ?? DEFAULT_TIMEOUT_MS;
+	}
+
+	get paired(): boolean {
+		return this.port !== null;
+	}
+
+	/** Pair with a specific PyMOL bridge; resets connection + handshake cache. */
+	setPort(port: number): void {
+		this.close();
+		this.helloInfo = null;
+		this.token = null;
+		this.port = port;
+	}
+
+	/** Forget the current pairing (connection failure, explicit /pymol off). */
+	unpair(): void {
+		this.close();
+		this.helloInfo = null;
+		this.token = null;
+		this.port = null;
 	}
 
 	private getToken(): string {
@@ -82,6 +104,15 @@ export class PyMolClient {
 
 	private connect(): Promise<net.Socket> {
 		if (this.sock) return Promise.resolve(this.sock);
+		if (this.port === null) {
+			return Promise.reject(
+				new PyMolError(
+					"NotPaired",
+					"no PyMOL session paired with this pi session — run /pymol to pick one " +
+						"(and pi_pymol_start in the PyMOL console if none is listed)",
+				),
+			);
+		}
 		return new Promise((resolve, reject) => {
 			const sock = net.createConnection({ host: this.host, port: this.port });
 			const fail = (err: Error) => {
@@ -114,6 +145,7 @@ export class PyMolClient {
 	private bestEffortInterrupt(): void {
 		if (this.token === null) return;
 		try {
+			if (this.port === null) return;
 			const frame = encodeFrame(JSON.stringify({ op: "interrupt", token: this.token }));
 			const side = net.createConnection({ host: this.host, port: this.port });
 			side.on("connect", () => {

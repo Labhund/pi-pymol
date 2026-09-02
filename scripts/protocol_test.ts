@@ -6,7 +6,7 @@
 import { PyMolClient, PyMolError } from "../extension/client.ts";
 import assert from "node:assert";
 
-const client = new PyMolClient({ timeoutMs: 240_000 });
+const client = new PyMolClient({ timeoutMs: 240_000, port: Number(process.env.PI_PYMOL_PORT) || undefined });
 
 // 1. handshake
 const hello = await client.hello();

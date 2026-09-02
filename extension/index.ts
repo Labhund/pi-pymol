@@ -15,6 +15,39 @@ import { PyMolClient, PyMolError, pngBlock, text } from "./client.ts";
 
 const client = new PyMolClient();
 
+interface BridgeSession {
+	pid: number;
+	port: number;
+	started: string;
+}
+
+/** Live pi-pymol bridges, from the plugin's session registry (~/.config/pi-pymol/sessions). */
+function listSessions(): BridgeSession[] {
+	const dir = path.join(os.homedir(), ".config", "pi-pymol", "sessions");
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(dir);
+	} catch {
+		return [];
+	}
+	const live: BridgeSession[] = [];
+	for (const name of entries) {
+		if (!name.endsWith(".json")) continue;
+		try {
+			const sess = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as BridgeSession;
+			if (typeof sess.pid !== "number" || typeof sess.port !== "number") throw new Error("bad file");
+			process.kill(sess.pid, 0); // throws ESRCH if dead
+			live.push(sess);
+		} catch (e) {
+			// stale registry entry (PyMOL closed) — clean it up
+			if ((e as NodeJS.ErrnoException).code === "ESRCH" || (e as NodeJS.ErrnoException).code === "ENOENT") {
+				fs.rmSync(path.join(dir, name), { force: true });
+			}
+		}
+	}
+	return live.sort((a, b) => a.port - b.port);
+}
+
 function errContent(e: unknown) {
 	const msg = e instanceof PyMolError ? `${e.type}: ${e.message}` : String(e);
 	return { content: [text(`pymol error — ${msg}`)], isError: true, details: {} };
@@ -33,6 +66,52 @@ function withHello<T>(fn: (args: Static<T>) => Promise<{ content: unknown[]; det
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.registerCommand("pymol", {
+		description: "Pair this session with a live PyMOL bridge (/pymol to pick, /pymol <port> direct)",
+		handler: async (args, ctx) => {
+			const arg = (args ?? "").trim();
+			const direct = arg && Number(arg);
+			if (direct) {
+				await pair(Number(arg), ctx);
+				return;
+			}
+			const sessions = listSessions();
+			if (sessions.length === 0) {
+				ctx.ui.notify(
+					"no live pi-pymol bridges — run  pi_pymol_start  in a PyMOL console first",
+					"warning",
+				);
+				return;
+			}
+			if (sessions.length === 1) {
+				await pair(sessions[0].port, ctx);
+				return;
+			}
+			const options = sessions.map(
+				(s) => `port ${s.port} — pid ${s.pid}, started ${s.started}`,
+			);
+			const pick = await ctx.ui.select("Pair with PyMOL session:", options);
+			if (pick === undefined) return;
+			const chosen = sessions[options.indexOf(pick)];
+			if (chosen) await pair(chosen.port, ctx);
+		},
+	});
+
+	async function pair(port: number, ctx: { ui: { notify(msg: string, kind?: string): void } }) {
+		client.setPort(port);
+		try {
+			const hello = await client.hello();
+			ctx.ui.notify(
+				`paired: PyMOL ${hello.pymol_version} on port ${port} (protocol ${hello.protocol})`,
+				"info",
+			);
+		} catch (e) {
+			client.unpair();
+			const msg = e instanceof PyMolError ? `${e.type}: ${e.message}` : String(e);
+			ctx.ui.notify(`pairing failed on port ${port} — ${msg}`, "error");
+		}
+	}
+
 	pi.registerTool({
 		name: "pymol_status",
 		label: "PyMOL status",

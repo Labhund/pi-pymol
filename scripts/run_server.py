@@ -34,10 +34,7 @@ if not cmd.get_names("public"):
     cmd.bg_color("white")
     cmd.orient()
 
-port = int(os.environ.get("PI_PYMOL_TEST_PORT", "9877"))
-server = plugin_ns["SocketServer"](port=port)
-assert server.start(), "server already running"
-print(f"LISTENING {port}", flush=True)
+plugin_ns["pi_pymol_start"](int(os.environ.get("PI_PYMOL_TEST_PORT", "9877")))
 
 # Script ENDS here. Under `pymol -cqR` PyMOL then enters its executive
 # mainloop, which is what services worker-thread cmd calls. Never busy-loop
