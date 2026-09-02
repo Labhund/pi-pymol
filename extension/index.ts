@@ -21,7 +21,8 @@ function errContent(e: unknown) {
 }
 
 function withHello<T>(fn: (args: Static<T>) => Promise<{ content: unknown[]; details?: object }>) {
-	return async (args: Static<T>) => {
+	// pi calls execute(toolCallId, params, ...); we only care about params.
+	return async (_toolCallId: string, args: Static<T>) => {
 		try {
 			await client.hello();
 			return await fn(args);
@@ -40,7 +41,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({}),
 		execute: withHello(async () => {
 			const hello = await client.hello();
-			const status = await client.call("get_names", [], { quiet: 1 });
+			const status = await client.call("get_names", [], {});
 			return {
 				content: [
 					text(
