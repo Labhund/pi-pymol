@@ -526,22 +526,27 @@ def _remove_session_file(port: int) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _detect_remote_ip() -> str:
-    """Tailscale IP if available, else the primary non-loopback IPv4."""
+    """The machine's tailnet IPv4. Refuses when Tailscale is down or absent
+    rather than binding whatever public IP exists — a confident connect line
+    for an unroutable address wasted a debugging session (2026-09-03)."""
     import subprocess
     try:
         out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)
-        ip = out.stdout.strip().splitlines()[0].strip()
+        ip = out.stdout.strip().splitlines()[0].strip() if out.returncode == 0 else ""
         if ip:
             return ip
-    except Exception:
-        pass
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass  # GUI-only Tailscale installs have no CLI; probe the route next
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("100.100.100.100", 0))  # tailscale magic DNS; no packets sent
         return s.getsockname()[0]
     except OSError:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        raise RuntimeError(
+            "Tailscale is not connected on this machine "
+            "(no CLI and no route to the tailnet). Start Tailscale, "
+            "or pass an explicit host=<ip> to pi_pymol_start."
+        )
     finally:
         s.close()
 
@@ -570,7 +575,7 @@ def pi_pymol_start(port: int = 0, host: str = "") -> None:
         try:
             bind_host = _detect_remote_ip()
         except Exception as e:
-            print(f"pi-pymol: could not detect an IP ({e}); pass host=<ip> explicitly")
+            print(f"pi-pymol: {e}", flush=True)
             return
     try:
         server = SocketServer(host=bind_host, port=int(port))
