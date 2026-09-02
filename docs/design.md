@@ -98,5 +98,9 @@ shapes how the plugin may be used headless:
   stdin held open (`tail -f /dev/null |`): `-p` spawns a stdin-reader
   thread, which keeps `_launch_no_gui`'s keep-alive loop running, and its
   `p.draw()` idles the executive so plugin ops complete (get_names 0.00s).
+  **Cost: that keep-alive loop is hot** — a headless server burns ~100%+ CPU
+  while parked. Use headless server mode for test runs only; launch on
+  demand and kill after. The long-lived instance for real work is the GUI
+  build, which idles on its event loop at a few percent.
 - `scripts/launch_headless.sh` encodes this; `run_server.py` pre-loads a
   structure on the main thread for tests.

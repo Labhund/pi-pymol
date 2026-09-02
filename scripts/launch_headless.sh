@@ -2,6 +2,10 @@
 # Launch headless PyMOL with the pi-pymol plugin listening.
 # Usage: scripts/launch_headless.sh [port]
 #
+# NOTE: kill this after your test run — PyMOL's no-GUI keep-alive loop is
+# hot (~100% CPU while parked). Headless server mode is for tests only;
+# the long-lived instance for real work is the GUI build.
+#
 # Why this shape (pymol 3.1, verified 2026-09-02): with -c, PyMOL's
 # _launch_no_gui loop runs while a stdin-reader thread exists (-p) and each
 # pass calls p.draw(), which idles the executive — exactly what services
