@@ -238,27 +238,22 @@ export default function (pi: ExtensionAPI) {
 			timeout_ms: Type.Optional(Type.Number()),
 		}),
 		execute: withHello(async (args) => {
-			const tmp = path.join(
-				fs.mkdtempSync(path.join(os.tmpdir(), "pi-pymol-")),
-				"viewport.png",
-			);
-			const r = await client.call(
-				"png",
-				[tmp],
-				{
-					width: args.width ?? 800,
-					height: args.height ?? 600,
-					ray: args.ray ? 1 : 0,
-					dpi: -1,
-				},
-				args.timeout_ms ?? (args.ray ? 300_000 : undefined),
-			);
-			const data = fs.readFileSync(tmp);
-			fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
+			// Render to a temp file on the PYMOL machine, then ship the bytes
+			// back as base64 — agent and PyMOL may be on different machines
+			// (remote pairing), so a shared filesystem must not be assumed.
+			const tmp = path.join(os.tmpdir(), `pi-pymol-${process.pid}-${Date.now()}.png`);
+			const code = [
+				"import base64, os",
+				`cmd.png(${JSON.stringify(tmp)}, width=${args.width ?? 800}, height=${args.height ?? 600}, ray=${args.ray ? 1 : 0}, dpi=-1)`,
+				`_b = base64.b64encode(open(${JSON.stringify(tmp)}, 'rb').read()).decode()`,
+				`os.remove(${JSON.stringify(tmp)})`,
+			].join("\n");
+			const r = await client.execCode(code, "_b", args.timeout_ms ?? (args.ray ? 300_000 : undefined));
+			const data = Buffer.from(String(r.value), "base64");
 			return {
 				content: [
 					text(`Viewport captured (${data.length} bytes). ${String(r.stdout ?? "")}`),
-					pngBlock(data.toString("base64")),
+					pngBlock(String(r.value)),
 				],
 				details: { bytes: data.length },
 			};
@@ -348,7 +343,7 @@ export default function (pi: ExtensionAPI) {
 		name: "pymol_render",
 		label: "PyMOL render",
 		description:
-			"Ray-trace the current view to a PNG file on disk (publication-style artifact). Returns the absolute path. For seeing the view inline use pymol_screenshot.",
+			"Ray-trace the current view to a PNG file on disk (publication-style artifact). The file is written on the machine PyMOL runs on — with remote pairing that is the remote machine. Returns the absolute path. For seeing the view inline use pymol_screenshot.",
 		parameters: Type.Object({
 			filename: Type.String({ description: "output PNG path" }),
 			width: Type.Optional(Type.Number({ description: "default 1024" })),

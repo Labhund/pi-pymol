@@ -98,6 +98,16 @@ The bridge is a token-gated TCP socket, so it crosses Tailscale unchanged:
 - Session registry entries gain a `host` field; local listing unaffected
   (remote sessions pair manually, they are not in the local registry).
 
+## Cross-machine screenshots (v0.1.3 fix, 2026-09-03)
+
+`pymol_screenshot` originally wrote the PNG to a local temp path and read it
+back — correct only when agent and PyMOL share a filesystem (Arcadia's
+assumption). Remote pairing broke it (ENOENT on the agent side). Now the
+tool renders to a temp file on the PyMOL machine and ships the bytes back
+as base64 in the exec return (well under the 4 MiB frame cap; ~87 KB
+verified over Tailscale). `pymol_render` still writes to disk on the
+PyMOL machine — that is where the human works.
+
 ## Modes of use
 
 - **Live session** (this desktop, `pymol` GUI running): interactive collaboration,
