@@ -17,6 +17,32 @@ forked PyMOL, no MCP intermediary.
                                                                   live PyMOL window
 ```
 
+## Install
+
+Requirements: [pi](https://github.com/earendil-works/pi), PyMOL 2.6+ (3.1
+verified) in your PATH.
+
+```bash
+pi install git:github.com/Labhund/pi-pymol@v0.1.0
+```
+
+Then in PyMOL, expose any session you want the agent to reach:
+
+```
+run ~/.pymol.d/pi-pymol-plugin.py   # or install plugin/__init__.py via the Plugin Manager
+pi_pymol_start                      # binds a random free port, registers the session
+```
+
+And in your pi session:
+
+```
+/pymol          # list live bridges and pair (per-session; nothing auto-attaches)
+```
+
+Tools: `pymol_status`, `pymol_do`, `pymol_run`, `pymol_iterate`,
+`pymol_fasta`, `pymol_view`, `pymol_geometry`, `pymol_screenshot`,
+`pymol_render`.
+
 ## Status
 
 Design phase. See [docs/design.md](docs/design.md) for the protocol, tool surface,
