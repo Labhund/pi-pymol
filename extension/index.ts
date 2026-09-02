@@ -239,6 +239,85 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "pymol_view",
+		label: "PyMOL view",
+		description:
+			"Get or set the camera view of the live PyMOL session. Call with no arguments to read the current 18-float view matrix (save this before camera changes so you can restore the scientist's framing); pass `view` to restore/set one, optionally animating.",
+		parameters: Type.Object({
+			view: Type.Optional(
+				Type.Array(Type.Number(), { description: "18 floats as returned by this tool with no arguments" }),
+			),
+			animate: Type.Optional(Type.Number({ description: "seconds of interpolation (default 0)" })),
+		}),
+		execute: withHello(async (args) => {
+			if (args.view) {
+				if (args.view.length !== 18) {
+					return { content: [text("view must be exactly 18 floats")], isError: true, details: {} };
+				}
+				await client.call("set_view", [args.view], { animate: args.animate ?? 0 });
+				return { content: [text("view applied")], details: {} };
+			}
+			const r = await client.call("get_view", [], {});
+			return { content: [text(JSON.stringify(r.value))], details: { view: r.value } };
+		}),
+	});
+
+	pi.registerTool({
+		name: "pymol_geometry",
+		label: "PyMOL geometry",
+		description:
+			"Measure geometry or align structures in the live session. ops: distance/angle/dihedral (n single-atom selections, order matters); align (full alignment of mobile onto target: refined+initial RMSD, atom counts); rms (raw RMSD between selections). Selections are PyMOL selection expressions.",
+		parameters: Type.Object({
+			op: Type.String({ description: "distance | angle | dihedral | align | rms" }),
+			selections: Type.Array(Type.String(), {
+				description: "2 for distance/rms, 3 for angle, 4 for dihedral; align uses [mobile, target]",
+			}),
+		}),
+		execute: withHello(async (args) => {
+			const [a, b, c, d] = args.selections;
+			switch (args.op) {
+				case "distance": {
+					const r = await client.call("get_distance", [a, b], {});
+					return { content: [text(`distance ${a} <-> ${b}: ${r.value} A`)], details: { value: r.value } };
+				}
+				case "angle": {
+					const r = await client.call("get_angle", [a, b, c], {});
+					return { content: [text(`angle ${a}, ${b}, ${c}: ${r.value} deg`)], details: { value: r.value } };
+				}
+				case "dihedral": {
+					const r = await client.call("get_dihedral", [a, b, c, d], {});
+					return { content: [text(`dihedral: ${r.value} deg`)], details: { value: r.value } };
+				}
+				case "align": {
+					const r = await client.call("align", [a, b], {});
+					const v = r.value as number[];
+					const [rmsdRef, nRef, nCycles, rmsdInit, nInit, rawScore, nRes] = v;
+					return {
+						content: [
+							text(
+								`align ${a} -> ${b}: refined RMSD ${rmsdRef} A over ${nRef} atoms ` +
+									`(${nCycles} cycles); initial RMSD ${rmsdInit} A over ${nInit} atoms; ` +
+									`${nRes} residues aligned`,
+							),
+						],
+						details: { rmsd_refined: rmsdRef, n_atoms_refined: nRef, rmsd_initial: rmsdInit, n_residues: nRes },
+					};
+				}
+				case "rms": {
+					const r = await client.call("rms_cur", [a, b], {});
+					return { content: [text(`rms ${a} vs ${b}: ${r.value} A`)], details: { value: r.value } };
+				}
+				default:
+					return {
+						content: [text(`unknown op '${args.op}' — use distance|angle|dihedral|align|rms`)],
+						isError: true,
+						details: {},
+					};
+			}
+		}),
+	});
+
+	pi.registerTool({
 		name: "pymol_render",
 		label: "PyMOL render",
 		description:
