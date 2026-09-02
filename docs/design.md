@@ -57,10 +57,17 @@ Small, typed, grows by demonstrated need only:
 | `pymol_screenshot` | viewport PNG inline to the model |
 | `pymol_render` | ray-traced PNG to disk (artifact) |
 
-Image flow: `pymol_screenshot` returns an image content block inline if the pi
-tool-result path carries images (verify in S2); guaranteed fallback is PNG to
-scratch + `read` (pi's `read` attaches images natively). Spike evidence so far:
-`sendUserMessage` accepts image blocks (docs); tool-result image support TBC.
+Image flow (VERIFIED live 2026-09-02): `pymol_screenshot` returns an inline
+image content block (`{type:"image", mimeType, data}`) and the model receives
+it — tool-result images work in pi. No fallback path needed; `read`-on-PNG
+remains useful for large renders anyway.
+
+Live-session gotchas found during testing: pi calls
+`execute(toolCallId, params, ...)` — a wrapper that mistakes the first arg
+for params silently strips all tool arguments (status works, everything else
+gets undefined); prefer `cmd.*` API calls or `exec` over `cmd.do` from
+worker threads in GUI mode (a `do` crash surfaced as splitlines-on-None
+inside PyMOL).
 
 ## Modes of use
 
