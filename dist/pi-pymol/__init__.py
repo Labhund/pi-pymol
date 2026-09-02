@@ -641,14 +641,30 @@ def make_dialog() -> Any:
         global socket_server, listening, current_port
         if not listening:
             current_port = form.input_port.value()
-            socket_server = SocketServer(port=current_port)
-            if socket_server.start():
+            host = "127.0.0.1"
+            if getattr(form, "check_remote", None) and form.check_remote.isChecked():
+                try:
+                    host = _detect_remote_ip()
+                except Exception as e:
+                    _set_status(form, f"no bindable IP: {e}")
+                    return
+            server = SocketServer(host=host, port=current_port)
+            if server.start():
+                socket_server = server
                 listening = True
+                current_port = server.socket.getsockname()[1]
+                _write_session_file(current_port, host)
                 form.button_toggle_listening.setText("Stop Listening")
-                _set_status(form, f"Listening on port {current_port}")
+                if host in ("127.0.0.1", "localhost", "::1"):
+                    _set_status(form, f"Listening on port {current_port}")
+                else:
+                    _set_status(form, f"Listening on {host}:{current_port}")
+                    print("pi-pymol: paste into the remote pi session:", flush=True)
+                    print(f"/pymol connect {host}:{current_port}:{get_token()}", flush=True)
         else:
             if socket_server:
                 socket_server.stop()
+            _remove_session_file(current_port)
             listening = False
             form.button_toggle_listening.setText("Start Listening")
             _set_status(form, "Not listening")

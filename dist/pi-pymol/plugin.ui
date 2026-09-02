@@ -33,8 +33,8 @@
       <string notr="true">background-color: #000;color:white; padding: 20px</string>
      </property>
      <property name="text">
-      <string notr="true">PyMOL MCP Plugin
-Socket Server for MCP Integration</string>
+      <string notr="true">pi-pymol
+Agent bridge for this PyMOL session</string>
      </property>
      <property name="textFormat">
       <enum>Qt::PlainText</enum>
@@ -69,14 +69,21 @@ Socket Server for MCP Integration</string>
        </property>
       </widget>
      </item>
-     <item row="1" column="0">
+     <item row="1" column="0" colspan="2">
+      <widget class="QCheckBox" name="check_remote">
+       <property name="text">
+        <string notr="true">Expose over network (Tailscale/LAN) — prints a /pymol connect line</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
       <widget class="QLabel" name="label_3">
        <property name="text">
         <string notr="true">Status:</string>
        </property>
       </widget>
      </item>
-     <item row="1" column="1">
+     <item row="2" column="1">
       <widget class="QLabel" name="label_status">
        <property name="text">
         <string notr="true">Not listening</string>
