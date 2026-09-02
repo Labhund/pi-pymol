@@ -29,9 +29,24 @@ pi install git:github.com/Labhund/pi-pymol@v0.1.0
 Then in PyMOL, expose any session you want the agent to reach:
 
 ```
-run ~/.pymol.d/pi-pymol-plugin.py   # or install plugin/__init__.py via the Plugin Manager
-pi_pymol_start                      # binds a random free port, registers the session
+pi_pymol_start remote   # prints a /pymol connect ... line to paste into pi
 ```
+
+### Plugin Manager install (GUI users)
+
+Plugin Manager → **Install from URL** → paste:
+
+```
+https://raw.githubusercontent.com/Labhund/pi-pymol/main/dist/pi-pymol.zip
+```
+
+This installs a proper `pi-pymol` entry under the Plugin menu (with a
+Start Listening dialog). Note: PyMOL may show an error box at the end of
+the install — that is a cosmetic PyQt6 bug in PyMOL's own install
+confirmation (`mimic_tk`), the plugin itself installs fine; restart PyMOL
+and check Plugin → pi-pymol. Single-file installs (`__init__.py` or a
+hashed URL temp name) cannot be named `pi-pymol` — the zip's internal
+folder is what names the plugin.
 
 And in your pi session:
 
