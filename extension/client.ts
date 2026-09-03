@@ -216,10 +216,23 @@ export class PyMolClient {
 						if (settled) return;
 						settled = true;
 						sock.removeListener("data", onData);
+						sock.removeListener("close", onClose);
 						sock.setTimeout(0);
 						if (err) reject(err);
 						else resolve(env!);
 					};
+
+					// Peer EOF is a clean close (no 'error' event): without this, a plugin
+					// crash mid-call would leave the caller pending forever.
+					const onClose = () => {
+						finish(
+							new PyMolError(
+								"TransportError",
+								"connection closed before a response arrived — the PyMOL plugin may have crashed or stopped listening",
+							),
+						);
+					};
+					sock.on("close", onClose);
 
 					const onData = (chunk: Buffer) => {
 						buffer = Buffer.concat([buffer, chunk]);
