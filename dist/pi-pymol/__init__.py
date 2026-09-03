@@ -650,7 +650,13 @@ def make_dialog() -> Any:
     uifile = Path(__file__).parent / "plugin.ui"
     form = loadUi(uifile, dlg)
     form.input_port.setValue(current_port)
-    _set_status(form, "Not listening")
+    # Reflect a listener started headlessly (pi_pymol_start) so the button doesn't
+    # offer to start one that is up — first click would stop it instead.
+    if listening:
+        form.button_toggle_listening.setText("Stop Listening")
+        _set_status(form, f"Listening on port {current_port}")
+    else:
+        _set_status(form, "Not listening")
 
     def toggle_listening() -> None:
         global socket_server, listening, current_port

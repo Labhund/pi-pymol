@@ -19,38 +19,40 @@ forked PyMOL, no MCP intermediary.
 
 ## Install
 
-Requirements: [pi](https://github.com/earendil-works/pi), PyMOL 2.6+ (3.1
-verified) in your PATH.
+Two pieces: the **pi extension** (the agent side) and the **PyMOL plugin**
+(the PyMOL side). Both are needed. Requirements: [pi](https://github.com/earendil-works/pi),
+PyMOL 2.6+ (3.1 verified) in your PATH.
+
+**1. pi extension** — in a terminal:
 
 ```bash
-pi install git:github.com/Labhund/pi-pymol@v0.1.0
+pi install git:github.com/Labhund/pi-pymol@v0.1.3
 ```
 
-Then in PyMOL, expose any session you want the agent to reach:
+**2. PyMOL plugin** — from PyMOL's Plugin Manager (**Plugin → Plugin Manager →
+Install New Plugin**), either:
 
-```
+- **Install from URL** → paste:
+  ```
+  https://raw.githubusercontent.com/Labhund/pi-pymol/main/dist/pi-pymol.zip
+  ```
+  This installs a proper `pi-pymol` entry under the Plugin menu (with a
+  Start Listening dialog). Note: PyMOL may show an error box at the end of
+  the install — that is a cosmetic PyQt6 bug in PyMOL's own install
+  confirmation (`mimic_tk`), the plugin itself installs fine; restart PyMOL
+  and check Plugin → pi-pymol.
+- or **Choose file** → select this repo's `plugin/__init__.py`. Single-file
+  installs work but cannot be named `pi-pymol` (the Plugin Manager's name
+  regex can't contain a hyphen), so they land under a generic menu name —
+  the zip route is the better one.
+
+Then pair the two sides:
+
+```text
+# in PyMOL's console:
 pi_pymol_start remote   # prints a /pymol connect ... line to paste into pi
-```
 
-### Plugin Manager install (GUI users)
-
-Plugin Manager → **Install from URL** → paste:
-
-```
-https://raw.githubusercontent.com/Labhund/pi-pymol/main/dist/pi-pymol.zip
-```
-
-This installs a proper `pi-pymol` entry under the Plugin menu (with a
-Start Listening dialog). Note: PyMOL may show an error box at the end of
-the install — that is a cosmetic PyQt6 bug in PyMOL's own install
-confirmation (`mimic_tk`), the plugin itself installs fine; restart PyMOL
-and check Plugin → pi-pymol. Single-file installs (`__init__.py` or a
-hashed URL temp name) cannot be named `pi-pymol` — the zip's internal
-folder is what names the plugin.
-
-And in your pi session:
-
-```
+# in the pi session:
 /pymol          # list live bridges and pair (per-session; nothing auto-attaches)
 ```
 
@@ -81,8 +83,21 @@ export PI_PYMOL_TOKEN=...   # from the line above
 
 ## Status
 
-Design phase. See [docs/design.md](docs/design.md) for the protocol, tool surface,
-and phasing. Session 1 spike (headless render loop) in `scratch/`.
+Working — local and Tailscale-remote pairing verified end-to-end (v0.1.3).
+See [docs/design.md](docs/design.md) for the protocol, tool surface, and
+phasing.
+
+## Development
+
+The Python plugin is tested against a fake `pymol` module (no PyMOL needed);
+the TypeScript client runs against a real plugin server backed by that fake
+(`tests/fake_pymol_server.py`):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pytest
+.venv/bin/python -m pytest tests -q
+node --test extension/client.test.ts
+```
 
 ## Lineage
 

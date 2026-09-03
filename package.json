@@ -1,6 +1,6 @@
 {
   "name": "pi-pymol",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "PyMOL as a tool of your pi agent session \u2014 typed tools, inline viewport images, explicit pairing. Forked from Arcadia-Science/agentic-pymol.",
   "keywords": [
     "pi-package",
