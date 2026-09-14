@@ -189,7 +189,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Session health of the live PyMOL: protocol handshake, object and selection names, frame, state. Call first to verify the bridge.",
 		parameters: Type.Object({}),
-		execute: withHello(async () => {
+		execute: withHello(async (_args, signal) => {
 			const hello = await client.hello();
 			const status = await client.call("get_names", [], {}, undefined, signal);
 			const { content, details } = withConsole(
@@ -215,7 +215,7 @@ export default function (pi: ExtensionAPI) {
 			command: Type.String({ description: "PyMOL command line" }),
 			timeout_ms: Type.Optional(Type.Number({ description: "timeout in ms (default 60000)" })),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			const r = await client.call("do", [args.command], {}, args.timeout_ms, signal);
 			return withConsole([text(outputOrNoOutput(r.stdout, false))], r, { value: r.value });
 		}),
@@ -231,7 +231,7 @@ export default function (pi: ExtensionAPI) {
 			return_expr: Type.Optional(Type.String({ description: "expression to eval and return" })),
 			timeout_ms: Type.Optional(Type.Number()),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			const r = await client.execCode(args.code, args.return_expr, args.timeout_ms, signal);
 			const body = [r.stdout ?? "", r.value === undefined ? "" : String(r.value)]
 				.join("\n")
@@ -256,7 +256,7 @@ export default function (pi: ExtensionAPI) {
 			}),
 			state: Type.Optional(Type.Number({ description: "state index (default: current)" })),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			const r = await client.iterate(args.selection, args.properties, args.state ?? -1, undefined, signal);
 			const rows = r.value as Record<string, unknown>[];
 			return withConsole([text(JSON.stringify(rows, null, 1))], r, { n: rows.length });
@@ -270,7 +270,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			selection: Type.String({ description: "PyMOL selection (default 'all')" }),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			const r = await client.call("get_fastastr", [args.selection ?? "all"], {}, undefined, signal);
 			return withConsole([text(String(r.value))], r, {});
 		}),
@@ -287,7 +287,7 @@ export default function (pi: ExtensionAPI) {
 			ray: Type.Optional(Type.Boolean({ description: "ray-trace (slow, high quality)" })),
 			timeout_ms: Type.Optional(Type.Number()),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			// Render to a temp file on the PYMOL machine, then ship the bytes
 			// back as base64 — agent and PyMOL may be on different machines
 			// (remote pairing), so a shared filesystem must not be assumed.
@@ -323,7 +323,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			animate: Type.Optional(Type.Number({ description: "seconds of interpolation (default 0)" })),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			if (args.view) {
 				if (args.view.length !== 18) {
 					return { content: [text("view must be exactly 18 floats")], isError: true, details: {} };
@@ -347,7 +347,7 @@ export default function (pi: ExtensionAPI) {
 				description: "2 for distance/rms, 3 for angle, 4 for dihedral; align uses [mobile, target]",
 			}),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			const [a, b, c, d] = args.selections;
 			switch (args.op) {
 				case "distance": {
@@ -413,7 +413,7 @@ export default function (pi: ExtensionAPI) {
 			ray: Type.Optional(Type.Boolean({ description: "default true" })),
 			timeout_ms: Type.Optional(Type.Number()),
 		}),
-		execute: withHello(async (args) => {
+		execute: withHello(async (args, signal) => {
 			const resolved = path.resolve(args.filename.replace(/^~/, os.homedir()));
 			const r = await client.call(
 				"png",
