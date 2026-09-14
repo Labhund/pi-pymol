@@ -416,6 +416,21 @@ def _drain_console() -> list[str]:
     return []
 
 
+def _safe_format_exc(exc: BaseException) -> str:
+    """
+    traceback.format_exc(), guarded. Python 3.14's formatter computes
+    'Did you mean' suggestions by iterating frame locals; PyMOL's cmd Wrapper
+    is not iterable, so formatting the NameError killed the formatter itself
+    — twice more — and the escaping TypeError killed the client-handler
+    thread (live traceback, 2026-09-14). Formatting must never be able to
+    kill the connection.
+    """
+    try:
+        return traceback.format_exc()
+    except Exception:
+        return f"{type(exc).__name__}: {exc}"
+
+
 def _run_capturing(thunk) -> dict[str, Any]:
     buffer = io.StringIO()
     try:
@@ -426,7 +441,7 @@ def _run_capturing(thunk) -> dict[str, Any]:
             **_error_response(
                 type(e).__name__,
                 str(e),
-                traceback.format_exc(),
+                _safe_format_exc(e),
                 buffer.getvalue(),
             ),
             "console": _drain_console(),
@@ -517,13 +532,24 @@ class SocketServer:
         try:
             while self.running:
                 request = recv_message(client)
-                response = dispatch(request)
+                try:
+                    response = dispatch(request)
+                except (ConnectionError, OSError):
+                    raise
+                except Exception as e:
+                    # A crashing op must degrade to an error envelope, never
+                    # kill the handler thread: the thread serves ALL requests
+                    # on this connection, and its death surfaces client-side
+                    # as TransportError (2026-09-14 traceback cascade).
+                    logger.info(f"pi-pymol dispatch crashed: {type(e).__name__}: {e}")
+                    response = _error_response(
+                        "DispatchCrash", f"{type(e).__name__}: {e}", "", ""
+                    )
                 send_message(client, response)
         except (ConnectionError, OSError) as e:
             logger.info(f"pi-pymol client disconnected: {e}")
         except Exception as e:
-            logger.info(f"PyMOL MCP client handler crashed: {e}")
-            traceback.print_exc()
+            logger.info(f"pi-pymol client handler crashed: {type(e).__name__}: {e}")
         finally:
             try:
                 client.close()

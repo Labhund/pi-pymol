@@ -165,3 +165,50 @@ def test_quiet_op_returns_empty_console(running_plugin: tuple[str, int]) -> None
     response = send_recv_raw(host, port, _request("call", fn="echo", args=["hi"], kwargs={}))
     assert response["ok"] is True
     assert response.get("console") == []
+
+
+def test_nameerror_returns_clean_error_without_killing_connection(
+    running_plugin: tuple[str, int], fake_pymol: FakeCmd
+) -> None:
+    """The 2026-09-14 live cascade: a NameError whose traceback formatting
+    itself crashed (Python 3.14 suggestion machinery vs PyMOL Wrapper locals)
+    killed the client-handler thread. The op must return an error envelope
+    and the connection must survive."""
+    host, port = running_plugin
+    response = send_recv_raw(
+        host, port, _request("exec", code="cmd.iterate_state(-1, 'all', 'coord[2]')", return_expr=None)
+    )
+    assert response["ok"] is False
+    assert response["error"]["type"] in ("NameError", "TypeError")
+    # connection was closed by send_recv_raw; the server must accept a new one
+    response2 = send_recv_raw(host, port, _request("call", fn="echo", args=["alive"], kwargs={}))
+    assert response2["ok"] is True
+
+
+def test_formatting_failure_cannot_kill_handler(
+    running_plugin: tuple[str, int], fake_pymol: FakeCmd, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even when traceback formatting itself explodes, the response must be a
+    clean error envelope with a usable message, and the next request must work."""
+    import pi_pymol_plugin as plugin  # loaded via conftest import machinery
+
+    # simulate the 3.14 suggestion crash: format_exc raises
+    import traceback as _tb
+
+    real = _tb.format_exc
+
+    def boom() -> str:
+        raise TypeError("'wrapper.Wrapper' object is not iterable")
+
+    monkeypatch.setattr(_tb, "format_exc", boom)
+    host, port = running_plugin
+    response = send_recv_raw(
+        host, port, _request("exec", code="raise NameError('coord')", return_expr=None)
+    )
+    monkeypatch.setattr(_tb, "format_exc", real)
+    assert response["ok"] is False
+    assert response["error"]["type"] == "NameError"
+    assert "NameError: coord" in response["error"]["traceback"]
+    # still healthy
+    ok = send_recv_raw(host, port, _request("call", fn="echo", args=["x"], kwargs={}))
+    assert ok["value"] == "x"
