@@ -299,17 +299,34 @@ export default function (pi: ExtensionAPI) {
 			// back as base64 — agent and PyMOL may be on different machines
 			// (remote pairing), so a shared filesystem must not be assumed.
 			const tmp = path.join(os.tmpdir(), `pi-pymol-${process.pid}-${Date.now()}.png`);
+			// cmd.png with an explicit size RESIZES the live GL viewport in the
+			// ray=0 readback path and never restores it (Wayland: the Qt dock
+			// grows each shot; measured 2026-09-14). ray=1 renders offscreen at
+			// the requested size without touching the window — so a forced size
+			// always goes through ray. Models habitually pass explicit sizes
+			// from context, so this guard is what keeps their layout intact.
+			const wantSize = args.width != null || args.height != null;
+			const useRay = args.ray ?? wantSize;
+			const sizeSafe = !wantSize || useRay;
+			const w = sizeSafe ? (args.width ?? 0) : 0;
+			const h = sizeSafe ? (args.height ?? 0) : 0;
 			const code = [
 				"import base64, os",
-				`cmd.png(${JSON.stringify(tmp)}, width=${args.width ?? 0}, height=${args.height ?? 0}, ray=${args.ray ? 1 : 0}, dpi=-1)`,
+				`cmd.png(${JSON.stringify(tmp)}, width=${w}, height=${h}, ray=${useRay ? 1 : 0}, dpi=-1)`,
 				`_b = base64.b64encode(open(${JSON.stringify(tmp)}, 'rb').read()).decode()`,
 				`os.remove(${JSON.stringify(tmp)})`,
 			].join("\n");
-			const r = await client.execCode(code, "_b", args.timeout_ms ?? (args.ray ? 300_000 : undefined), signal);
+			const r = await client.execCode(code, "_b", args.timeout_ms ?? (useRay ? 300_000 : undefined), signal);
 			const data = Buffer.from(String(r.value), "base64");
+			const note =
+				wantSize && !sizeSafe
+					? "forced size ignored: explicit size with ray=false resizes the live viewport (Wayland); captured native instead. "
+					: "";
 			const { content, details } = withConsole(
 				[
-					text(`Viewport captured (${data.length} bytes). ${String(r.stdout ?? "")}`),
+					text(
+						`${note}Viewport captured (${data.length} bytes${useRay && wantSize ? `, ray ${args.width ?? "?"}x${args.height ?? "?"}` : ""}). ${String(r.stdout ?? "")}`,
+					),
 					pngBlock(String(r.value)),
 				],
 				r,
