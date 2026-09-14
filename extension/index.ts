@@ -282,8 +282,15 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Capture the current PyMOL viewport as an image returned inline, so you can SEE the current view. Use after any display change to verify visually. ray=true does a slow ray-traced render instead of the instant viewport snapshot.",
 		parameters: Type.Object({
-			width: Type.Optional(Type.Number({ description: "default 800" })),
-			height: Type.Optional(Type.Number({ description: "default 600" })),
+			width: Type.Optional(
+				Type.Number({
+					description:
+						"force a pixel width — RESIZES the live viewport on Wayland (2026-09-14); omit to capture at native window size",
+				}),
+			),
+			height: Type.Optional(
+				Type.Number({ description: "force a pixel height — see width warning" }),
+			),
 			ray: Type.Optional(Type.Boolean({ description: "ray-trace (slow, high quality)" })),
 			timeout_ms: Type.Optional(Type.Number()),
 		}),
@@ -294,7 +301,7 @@ export default function (pi: ExtensionAPI) {
 			const tmp = path.join(os.tmpdir(), `pi-pymol-${process.pid}-${Date.now()}.png`);
 			const code = [
 				"import base64, os",
-				`cmd.png(${JSON.stringify(tmp)}, width=${args.width ?? 800}, height=${args.height ?? 600}, ray=${args.ray ? 1 : 0}, dpi=-1)`,
+				`cmd.png(${JSON.stringify(tmp)}, width=${args.width ?? 0}, height=${args.height ?? 0}, ray=${args.ray ? 1 : 0}, dpi=-1)`,
 				`_b = base64.b64encode(open(${JSON.stringify(tmp)}, 'rb').read()).decode()`,
 				`os.remove(${JSON.stringify(tmp)})`,
 			].join("\n");
@@ -419,8 +426,10 @@ export default function (pi: ExtensionAPI) {
 				"png",
 				[resolved],
 				{
-					width: args.width ?? 1024,
-					height: args.height ?? 768,
+					// 0 = render at current viewport size. An explicit size would
+					// churn the live viewport (growing-panel bug on Wayland).
+					width: args.width ?? 0,
+					height: args.height ?? 0,
 					dpi: args.dpi ?? -1,
 					ray: (args.ray ?? true) ? 1 : 0,
 				},
