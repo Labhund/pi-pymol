@@ -52,6 +52,9 @@ class FakeCmd:
         self.get_extent_return: list[list[float]] = [[-1.0, -2.0, -3.0], [4.0, 5.0, 6.0]]
         self.get_object_list_return: list[str] = ["obj1", "obj2"]
         self.get_names_return: list[str] = ["sel1"]
+        # console (GUI feedback) lines the next op emits; drained like the real
+        # C-layer buffer so plugin console-capture tests can drive it
+        self.pending_feedback: list[str] = []
         self.get_chains_return: list[str] = ["A", "B"]
         self.count_atoms_return: int = 500
         self.count_states_return: int = 10
@@ -189,4 +192,17 @@ class FakeCmd:
 
     def do(self, *args: Any, **kwargs: Any) -> None:
         self._record("do", args, kwargs)
+        # simulate PyMOL's C-layer feedback: a failing command writes console
+        # errors without raising
+        if self.pending_feedback:
+            return
+        if args and isinstance(args[0], str) and "garbage_command_xyz" in args[0]:
+            self.calls.append(("feedback", (" Error: Unknown command: 'garbage_command_xyz'",), {}))
+
+    def _get_feedback(self, _self: Any = None) -> list[str] | None:
+        # mirrors pymol.internal._get_feedback: drain-and-clear, None when busy
+        lines, self.pending_feedback = self.pending_feedback, []
+        fb = [c[1][0] for c in self.calls if c[0] == "feedback"]
+        self.calls = [c for c in self.calls if c[0] != "feedback"]
+        return fb + lines
         print(f"did: {args[0] if args else ''}")

@@ -38,6 +38,8 @@ interface Envelope {
 	ok: boolean;
 	value?: unknown;
 	stdout?: string;
+	/** PyMOL console (GUI feedback) lines emitted during the op — plugin 0.2.0+. */
+	console?: unknown;
 	error?: { type: string; message: string; traceback: string };
 }
 

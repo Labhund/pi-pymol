@@ -62,7 +62,7 @@ def test_hello_reports_protocol_and_versions(running_plugin: tuple[str, int]) ->
     assert response["ok"] is True
     value = response["value"]
     assert value["protocol"] == 1
-    assert value["plugin_version"] == "0.1.3"
+    assert value["plugin_version"] == "0.2.0"
     assert value["pymol_version"] == FAKE_PYMOL_VERSION
 
 
@@ -141,3 +141,27 @@ def test_iterate_empty_properties_rejected(running_plugin: tuple[str, int]) -> N
     )
     assert response["ok"] is False
     assert response["error"]["type"] == "BadRequest"
+
+
+
+def test_failing_do_reports_console_errors(
+    running_plugin: tuple[str, int], fake_pymol: FakeCmd
+) -> None:
+    """A command-language error prints to the PyMOL console without raising —
+    the response must carry those console lines so the agent can react
+    (2026-09-14: the agent iterated blind while the GUI console held the
+    diagnosis)."""
+    host, port = running_plugin
+    fake_pymol.pending_feedback = [" Error: Unknown command: 'garbage_command_xyz'"]
+    response = send_recv_raw(
+        host, port, _request("call", fn="echo", args=["hi"], kwargs={})
+    )
+    assert response["ok"] is True
+    assert "garbage_command_xyz" in "".join(response.get("console", []))
+
+
+def test_quiet_op_returns_empty_console(running_plugin: tuple[str, int]) -> None:
+    host, port = running_plugin
+    response = send_recv_raw(host, port, _request("call", fn="echo", args=["hi"], kwargs={}))
+    assert response["ok"] is True
+    assert response.get("console") == []

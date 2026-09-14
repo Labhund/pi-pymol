@@ -53,6 +53,34 @@ function errContent(e: unknown) {
 	return { content: [text(`pymol error — ${msg}`)], isError: true, details: {} };
 }
 
+/**
+ * PyMOL console lines emitted during the op (same text the GUI console shows).
+ * Without these, interpreter errors are invisible to the agent — it sees only
+ * empty stdout and cannot react. Included as a separate block; empty when the
+ * plugin (<=0.1.3) or the op emitted nothing.
+ */
+function consoleText(env: { console?: unknown }): string {
+	const lines = Array.isArray(env.console) ? env.console.map(String) : [];
+	if (lines.length === 0) return "";
+	const shown = lines.slice(-30);
+	const more = lines.length > shown.length ? `\n…[+${lines.length - shown.length} earlier console lines elided]` : "";
+	return `pymol console:\n${shown.join("\n")}${more}`;
+}
+
+/** Attach console output to a tool result, if any was emitted. */
+function withConsole(
+	content: unknown[],
+	env: { console?: unknown; stdout?: unknown },
+	details: Record<string, unknown>,
+): { content: unknown[]; details: Record<string, unknown> } {
+	const c = consoleText(env);
+	if (c) {
+		content.push(text(c));
+		details.console = env.console;
+	}
+	return { content, details };
+}
+
 function withHello<T>(fn: (args: Static<T>, signal: AbortSignal | undefined) => Promise<{ content: unknown[]; details?: object }>) {
 	// pi calls execute(toolCallId, params, signal, onUpdate, ctx); we forward
 	// the abort signal so Esc/turn-cancel can break a pending socket call —
@@ -150,15 +178,17 @@ export default function (pi: ExtensionAPI) {
 		execute: withHello(async () => {
 			const hello = await client.hello();
 			const status = await client.call("get_names", [], {}, undefined, signal);
-			return {
-				content: [
+			const { content, details } = withConsole(
+				[
 					text(
 						`PyMOL ${hello.pymol_version} · plugin ${hello.plugin_version} · protocol ${hello.protocol}\n` +
 							JSON.stringify(status.value, null, 2),
 					),
 				],
-				details: { hello, names: status.value },
-			};
+				status,
+				{ hello, names: status.value },
+			);
+			return { content, details };
 		}),
 	});
 
@@ -173,7 +203,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 		execute: withHello(async (args) => {
 			const r = await client.call("do", [args.command], {}, args.timeout_ms, signal);
-			return { content: [text(String(r.stdout ?? ""))], details: { value: r.value } };
+			return withConsole([text(String(r.stdout ?? ""))], r, { value: r.value });
 		}),
 	});
 
@@ -189,10 +219,11 @@ export default function (pi: ExtensionAPI) {
 		}),
 		execute: withHello(async (args) => {
 			const r = await client.execCode(args.code, args.return_expr, args.timeout_ms, signal);
-			return {
-				content: [text([r.stdout ?? "", r.value === undefined ? "" : String(r.value)].join("\n"))],
-				details: { value: r.value },
-			};
+			return withConsole(
+				[text([r.stdout ?? "", r.value === undefined ? "" : String(r.value)].join("\n"))],
+				r,
+				{ value: r.value },
+			);
 		}),
 	});
 
@@ -211,7 +242,7 @@ export default function (pi: ExtensionAPI) {
 		execute: withHello(async (args) => {
 			const r = await client.iterate(args.selection, args.properties, args.state ?? -1, undefined, signal);
 			const rows = r.value as Record<string, unknown>[];
-			return { content: [text(JSON.stringify(rows, null, 1))], details: { n: rows.length } };
+			return withConsole([text(JSON.stringify(rows, null, 1))], r, { n: rows.length });
 		}),
 	});
 
@@ -224,7 +255,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 		execute: withHello(async (args) => {
 			const r = await client.call("get_fastastr", [args.selection ?? "all"], {}, undefined, signal);
-			return { content: [text(String(r.value))], details: {} };
+			return withConsole([text(String(r.value))], r, {});
 		}),
 	});
 
@@ -252,13 +283,15 @@ export default function (pi: ExtensionAPI) {
 			].join("\n");
 			const r = await client.execCode(code, "_b", args.timeout_ms ?? (args.ray ? 300_000 : undefined), signal);
 			const data = Buffer.from(String(r.value), "base64");
-			return {
-				content: [
+			const { content, details } = withConsole(
+				[
 					text(`Viewport captured (${data.length} bytes). ${String(r.stdout ?? "")}`),
 					pngBlock(String(r.value)),
 				],
-				details: { bytes: data.length },
-			};
+				r,
+				{ bytes: data.length },
+			);
+			return { content, details };
 		}),
 	});
 
@@ -278,11 +311,11 @@ export default function (pi: ExtensionAPI) {
 				if (args.view.length !== 18) {
 					return { content: [text("view must be exactly 18 floats")], isError: true, details: {} };
 				}
-				await client.call("set_view", [args.view], { animate: args.animate ?? 0 }, undefined, signal);
-				return { content: [text("view applied")], details: {} };
+				const r = await client.call("set_view", [args.view], { animate: args.animate ?? 0 }, undefined, signal);
+				return withConsole([text("view applied")], r, {});
 			}
 			const r = await client.call("get_view", [], {}, undefined, signal);
-			return { content: [text(JSON.stringify(r.value))], details: { view: r.value } };
+			return withConsole([text(JSON.stringify(r.value))], r, { view: r.value });
 		}),
 	});
 
@@ -302,34 +335,43 @@ export default function (pi: ExtensionAPI) {
 			switch (args.op) {
 				case "distance": {
 					const r = await client.call("get_distance", [a, b], {}, undefined, signal);
-					return { content: [text(`distance ${a} <-> ${b}: ${r.value} A`)], details: { value: r.value } };
+					return withConsole(
+						[text(`distance ${a} <-> ${b}: ${r.value} A`)],
+						r,
+						{ value: r.value },
+					);
 				}
 				case "angle": {
 					const r = await client.call("get_angle", [a, b, c], {}, undefined, signal);
-					return { content: [text(`angle ${a}, ${b}, ${c}: ${r.value} deg`)], details: { value: r.value } };
+					return withConsole(
+						[text(`angle ${a}, ${b}, ${c}: ${r.value} deg`)],
+						r,
+						{ value: r.value },
+					);
 				}
 				case "dihedral": {
 					const r = await client.call("get_dihedral", [a, b, c, d], {}, undefined, signal);
-					return { content: [text(`dihedral: ${r.value} deg`)], details: { value: r.value } };
+					return withConsole([text(`dihedral: ${r.value} deg`)], r, { value: r.value });
 				}
 				case "align": {
 					const r = await client.call("align", [a, b], {}, undefined, signal);
 					const v = r.value as number[];
 					const [rmsdRef, nRef, nCycles, rmsdInit, nInit, rawScore, nRes] = v;
-					return {
-						content: [
+					return withConsole(
+						[
 							text(
 								`align ${a} -> ${b}: refined RMSD ${rmsdRef} A over ${nRef} atoms ` +
 									`(${nCycles} cycles); initial RMSD ${rmsdInit} A over ${nInit} atoms; ` +
 									`${nRes} residues aligned`,
 							),
 						],
-						details: { rmsd_refined: rmsdRef, n_atoms_refined: nRef, rmsd_initial: rmsdInit, n_residues: nRes },
-					};
+						r,
+						{ rmsd_refined: rmsdRef, n_atoms_refined: nRef, rmsd_initial: rmsdInit, n_residues: nRes },
+					);
 				}
 				case "rms": {
 					const r = await client.call("rms_cur", [a, b], {}, undefined, signal);
-					return { content: [text(`rms ${a} vs ${b}: ${r.value} A`)], details: { value: r.value } };
+					return withConsole([text(`rms ${a} vs ${b}: ${r.value} A`)], r, { value: r.value });
 				}
 				default:
 					return {
@@ -356,7 +398,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 		execute: withHello(async (args) => {
 			const resolved = path.resolve(args.filename.replace(/^~/, os.homedir()));
-			await client.call(
+			const r = await client.call(
 				"png",
 				[resolved],
 				{
@@ -368,7 +410,7 @@ export default function (pi: ExtensionAPI) {
 				args.timeout_ms ?? 300_000,
 				signal,
 			);
-			return { content: [text(resolved)], details: { path: resolved } };
+			return withConsole([text(resolved)], r, { path: resolved });
 		}),
 	});
 }
