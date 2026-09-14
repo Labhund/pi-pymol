@@ -246,6 +246,10 @@ def token_ok(presented: Any) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+OP_LOCK = threading.Lock()
+_LOCKED_OPS: dict[str, Any] = {}  # registered after the handlers are defined
+
+
 def dispatch(request: dict[str, Any]) -> dict[str, Any]:
     if not token_ok(request.get("token")):
         return _error_response("Unauthorized", "missing or invalid auth token", "", "")
@@ -263,12 +267,15 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
             },
             "stdout": "",
         }
-    if op == "call":
-        return _handle_call(request)
-    if op == "iterate":
-        return _handle_iterate(request)
-    if op == "exec":
-        return _handle_exec(request)
+    # PyMOL's C API is not safe for concurrent worker-thread calls: parallel
+    # ops killed connections outright and once brought down the whole PyMOL
+    # process (2026-09-14, live). Serialize every cmd-touching op — the old
+    # client's shared cached socket provided this by accident; per-call
+    # sockets exposed the gap. 'interrupt' stays outside the lock: it is the
+    # emergency break for a hung op.
+    if op in _LOCKED_OPS:
+        with OP_LOCK:
+            return _LOCKED_OPS[op](request)
     if op == "interrupt":
         return _handle_interrupt(request)
     return _error_response("BadRequest", f"unknown op: {op!r}", "", "")
@@ -736,3 +743,8 @@ def _set_status(form: Any, text: str) -> None:
         form.label_status.setStyleSheet("color: green;")
     else:
         form.label_status.setStyleSheet("")
+
+
+# Register the lock-serialized ops after their handlers exist (file order:
+# dispatch comes before the handler definitions).
+_LOCKED_OPS.update({"call": _handle_call, "iterate": _handle_iterate, "exec": _handle_exec})
