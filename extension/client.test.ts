@@ -130,6 +130,90 @@ test(
 	},
 );
 
+test("second call reconnects after the plugin closed the previous connection", { timeout: 10_000 }, async () => {
+	// Regression for the 2026-09-14 freeze: the client cached a socket the
+	// peer had closed; write() on the destroyed socket silently did nothing
+	// (no error/close events), so every later call pended forever. The client
+	// must detect the corpse and reconnect.
+	let reqs = 0;
+	const oneShot = net.createServer((sock) => {
+		let answered = false;
+		sock.on("data", (chunk: Buffer) => {
+			// ignore interrupt side-channel frames
+			if (chunk.toString("utf8").includes('"op":"interrupt"')) return;
+			if (answered) return; // one answer per connection, even if the
+			answered = true;      // request arrives split across chunks
+			reqs++;
+			const body = Buffer.from(JSON.stringify({ ok: true, value: `r${reqs}`, stdout: "" }));
+			const head = Buffer.alloc(4);
+			head.writeUInt32BE(body.length, 0);
+			sock.write(Buffer.concat([head, body]));
+			sock.end(); // graceful peer close right after answering
+		});
+	});
+	await new Promise<void>((resolve) => oneShot.listen(0, "127.0.0.1", resolve));
+	const p = (oneShot.address() as net.AddressInfo).port;
+	try {
+		const client = new PyMolClient({ host: "127.0.0.1", port: p, timeoutMs: 3000 });
+		const first = await client.call("echo", ["a"]);
+		assert.equal(first.value, "r1");
+		// must NOT hang on the destroyed cached socket
+		const second = await client.call("echo", ["b"]);
+		assert.equal(second.value, "r2");
+		assert.equal(reqs, 2, "second request must arrive over a fresh connection");
+	} finally {
+		oneShot.close();
+	}
+});
+
+test("watchdog is wall-clock: fires even while the peer keeps the connection noisy", { timeout: 10_000 }, async () => {
+	// A socket-inactivity timeout dies with the socket; the watchdog must not.
+	// The peer never answers but keeps writing noise, so any inactivity-based
+	// timer would keep resetting — the call must still time out on schedule.
+	const srv = net.createServer((sock) => {
+		sock.on("data", () => {}); // swallow requests, never respond
+		// stream a valid header announcing a 1 MiB response, then drip bytes
+		// forever without ever completing it: every drip resets socket
+		// inactivity, so an inactivity-based timeout would never fire
+		const head = Buffer.alloc(4);
+		head.writeUInt32BE(1048576, 0);
+		sock.write(head);
+		const drip = setInterval(() => {
+			try { sock.write("\x00"); } catch { /* ignore */ }
+		}, 50);
+		sock.on("close", () => clearInterval(drip));
+		sock.on("error", () => {});
+	});
+	await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+	const p = (srv.address() as net.AddressInfo).port;
+	try {
+		const client = new PyMolClient({ host: "127.0.0.1", port: p, timeoutMs: 250 });
+		const t0 = Date.now();
+		await assert.rejects(
+			client.call("echo", ["x"]),
+			(err: unknown) => err instanceof PyMolError && err.type === "TransportTimeout",
+		);
+		assert.ok(Date.now() - t0 < 2000, "watchdog must fire on wall-clock schedule");
+	} finally {
+		srv.close();
+	}
+});
+
+test("abort signal breaks a pending call and fires the side-channel interrupt", { timeout: 15_000 }, async () => {
+	const client = newClient(30_000);
+	const ac = new AbortController();
+	const pending = client.call("slow", [], { duration: 2.0 }, undefined, ac.signal);
+	setTimeout(() => ac.abort(), 150);
+	await assert.rejects(
+		pending,
+		(err: unknown) => err instanceof PyMolError && err.type === "Aborted",
+	);
+	// the plugin must have received op="interrupt" on a fresh connection
+	// (cumulative counter: the earlier timeout test fired INTERRUPTS 1)
+	const line = await errLines.waitFor((l) => l === "INTERRUPTS 2", "INTERRUPTS 2");
+	assert.equal(line, "INTERRUPTS 2");
+});
+
 test("plain transport error surfaces TransportError and fires no interrupt", { timeout: 15_000 }, async () => {
 	// A peer that accepts and immediately destroys each connection: the client
 	// must see a transport error (not a timeout), and any side-channel interrupt

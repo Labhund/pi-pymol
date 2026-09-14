@@ -119,7 +119,15 @@ export class PyMolClient {
 	// the file/env when this.token is null
 
 	private connect(): Promise<net.Socket> {
-		if (this.sock) return Promise.resolve(this.sock);
+		// One fresh connection per call — never reuse across calls. Reusing a
+		// cached socket hung this extension twice (2026-09-03 remote, 2026-09-14
+		// local): a peer-closed socket silently swallows write() (no 'error', no
+		// 'close', no timeout), and liveness checks race the FIN (a socket can
+		// look healthy the instant before its 'close' event processes). Local
+		// TCP connect is ~0.1ms against PyMOL ops that take seconds; per-call
+		// sockets also let concurrent calls stop interleaving frames on one
+		// shared pipe. this.sock tracks the latest socket only so close()/
+		// unpair() can still tear it down.
 		if (this.port === null) {
 			return Promise.reject(
 				new PyMolError(
@@ -168,6 +176,7 @@ export class PyMolClient {
 				clearTimeout(timer);
 				if (settled) return;
 				settled = true;
+				this.close(); // drop any previous socket before tracking the new one
 				this.sock = sock;
 				resolve(sock);
 			});
@@ -198,7 +207,7 @@ export class PyMolClient {
 		}
 	}
 
-	private sendRecv(request: Record<string, unknown>, timeoutMs: number): Promise<Envelope> {
+	private sendRecv(request: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<Envelope> {
 		return this.connect().then(
 			(sock) =>
 				new Promise<Envelope>((resolve, reject) => {
@@ -211,20 +220,25 @@ export class PyMolClient {
 					let buffer = Buffer.alloc(0);
 					let expected: number | null = null;
 					let settled = false;
+					let watchdog: NodeJS.Timeout | null = null;
 
 					const finish = (err: PyMolError | null, env?: Envelope) => {
 						if (settled) return;
 						settled = true;
+						clearTimeout(watchdog!);
+						if (signal) signal.removeEventListener("abort", onAbort);
 						sock.removeListener("data", onData);
 						sock.removeListener("close", onClose);
-						sock.setTimeout(0);
 						if (err) reject(err);
 						else resolve(env!);
 					};
 
 					// Peer EOF is a clean close (no 'error' event): without this, a plugin
-					// crash mid-call would leave the caller pending forever.
+					// crash mid-call would leave the caller pending forever. Drop the dead
+					// socket from the cache too — reusing it would silently swallow the
+					// next request (no error, no close, no timeout) and hang the session.
 					const onClose = () => {
+						this.close();
 						finish(
 							new PyMolError(
 								"TransportError",
@@ -256,7 +270,12 @@ export class PyMolClient {
 					};
 
 					sock.on("data", onData);
-					sock.setTimeout(timeoutMs, () => {
+
+					// Wall-clock watchdog, independent of socket events. Socket-event
+					// timers die with the socket — exactly when they are needed most
+					// (2026-09-14 freeze). This one fires regardless of socket state,
+					// and drops the corpse so the next call reconnects.
+					watchdog = setTimeout(() => {
 						this.close();
 						this.bestEffortInterrupt();
 						finish(
@@ -266,7 +285,28 @@ export class PyMolClient {
 									"(e.g. ray) will bail out, pure-Python loops may not",
 							),
 						);
-					});
+					}, timeoutMs);
+
+					// User abort (Esc / turn cancel) must break a pending call too —
+					// a hung tool call must never be un-interruptible.
+					const onAbort = () => {
+						this.close();
+						this.bestEffortInterrupt();
+						finish(
+							new PyMolError(
+								"Aborted",
+								"call aborted — user interrupt while the PyMOL call was in flight (interrupt sent to PyMOL)",
+							),
+						);
+					};
+					if (signal) {
+						if (signal.aborted) {
+							onAbort();
+							return;
+						}
+						signal.addEventListener("abort", onAbort);
+					}
+
 					sock.once("error", (err: Error) => {
 						this.close();
 						finish(new PyMolError("TransportError", `socket I/O failed: ${err.message}`));
@@ -276,9 +316,8 @@ export class PyMolClient {
 		);
 	}
 
-	private async do(request: Record<string, unknown>, timeoutMs?: number): Promise<Envelope> {
-		const t0 = Date.now();
-		const env = await this.sendRecv(request, timeoutMs ?? this.timeoutMs);
+	private async do(request: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<Envelope> {
+		const env = await this.sendRecv(request, timeoutMs ?? this.timeoutMs, signal);
 		if (!env.ok) {
 			const err = env.error ?? { type: "Unknown", message: "no error detail", traceback: "" };
 			throw new PyMolError(err.type, err.message, err.traceback, env.stdout ?? "");
@@ -287,9 +326,9 @@ export class PyMolClient {
 	}
 
 	/** Handshake: check protocol compatibility; runs once, then cached. */
-	async hello(): Promise<HelloInfo> {
+	async hello(signal?: AbortSignal): Promise<HelloInfo> {
 		if (this.helloInfo) return this.helloInfo;
-		const env = await this.do({ op: "hello" });
+		const env = await this.do({ op: "hello" }, undefined, signal);
 		const info = env.value as HelloInfo;
 		if (info.protocol !== PROTOCOL_VERSION) {
 			this.helloInfo = null;
@@ -303,16 +342,16 @@ export class PyMolClient {
 		return info;
 	}
 
-	call(fn: string, args: unknown[] = [], kwargs: Record<string, unknown> = {}, timeoutMs?: number) {
-		return this.do({ op: "call", fn, args, kwargs }, timeoutMs);
+	call(fn: string, args: unknown[] = [], kwargs: Record<string, unknown> = {}, timeoutMs?: number, signal?: AbortSignal) {
+		return this.do({ op: "call", fn, args, kwargs }, timeoutMs, signal);
 	}
 
-	iterate(selection: string, properties: string[], state: number, timeoutMs?: number) {
-		return this.do({ op: "iterate", selection, properties, state }, timeoutMs);
+	iterate(selection: string, properties: string[], state: number, timeoutMs?: number, signal?: AbortSignal) {
+		return this.do({ op: "iterate", selection, properties, state }, timeoutMs, signal);
 	}
 
-	execCode(code: string, returnExpr?: string, timeoutMs?: number) {
-		return this.do({ op: "exec", code, return_expr: returnExpr ?? null }, timeoutMs);
+	execCode(code: string, returnExpr?: string, timeoutMs?: number, signal?: AbortSignal) {
+		return this.do({ op: "exec", code, return_expr: returnExpr ?? null }, timeoutMs, signal);
 	}
 }
 

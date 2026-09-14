@@ -53,12 +53,14 @@ function errContent(e: unknown) {
 	return { content: [text(`pymol error — ${msg}`)], isError: true, details: {} };
 }
 
-function withHello<T>(fn: (args: Static<T>) => Promise<{ content: unknown[]; details?: object }>) {
-	// pi calls execute(toolCallId, params, ...); we only care about params.
-	return async (_toolCallId: string, args: Static<T>) => {
+function withHello<T>(fn: (args: Static<T>, signal: AbortSignal | undefined) => Promise<{ content: unknown[]; details?: object }>) {
+	// pi calls execute(toolCallId, params, signal, onUpdate, ctx); we forward
+	// the abort signal so Esc/turn-cancel can break a pending socket call —
+	// a hung PyMOL op must never be un-interruptible (2026-09-14 freeze).
+	return async (_toolCallId: string, args: Static<T>, signal?: AbortSignal) => {
 		try {
-			await client.hello();
-			return await fn(args);
+			await client.hello(signal);
+			return await fn(args, signal);
 		} catch (e) {
 			return errContent(e);
 		}
@@ -147,7 +149,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({}),
 		execute: withHello(async () => {
 			const hello = await client.hello();
-			const status = await client.call("get_names", [], {});
+			const status = await client.call("get_names", [], {}, undefined, signal);
 			return {
 				content: [
 					text(
@@ -170,7 +172,7 @@ export default function (pi: ExtensionAPI) {
 			timeout_ms: Type.Optional(Type.Number({ description: "timeout in ms (default 60000)" })),
 		}),
 		execute: withHello(async (args) => {
-			const r = await client.call("do", [args.command], {}, args.timeout_ms);
+			const r = await client.call("do", [args.command], {}, args.timeout_ms, signal);
 			return { content: [text(String(r.stdout ?? ""))], details: { value: r.value } };
 		}),
 	});
@@ -186,7 +188,7 @@ export default function (pi: ExtensionAPI) {
 			timeout_ms: Type.Optional(Type.Number()),
 		}),
 		execute: withHello(async (args) => {
-			const r = await client.execCode(args.code, args.return_expr, args.timeout_ms);
+			const r = await client.execCode(args.code, args.return_expr, args.timeout_ms, signal);
 			return {
 				content: [text([r.stdout ?? "", r.value === undefined ? "" : String(r.value)].join("\n"))],
 				details: { value: r.value },
@@ -207,7 +209,7 @@ export default function (pi: ExtensionAPI) {
 			state: Type.Optional(Type.Number({ description: "state index (default: current)" })),
 		}),
 		execute: withHello(async (args) => {
-			const r = await client.iterate(args.selection, args.properties, args.state ?? -1);
+			const r = await client.iterate(args.selection, args.properties, args.state ?? -1, undefined, signal);
 			const rows = r.value as Record<string, unknown>[];
 			return { content: [text(JSON.stringify(rows, null, 1))], details: { n: rows.length } };
 		}),
@@ -221,7 +223,7 @@ export default function (pi: ExtensionAPI) {
 			selection: Type.String({ description: "PyMOL selection (default 'all')" }),
 		}),
 		execute: withHello(async (args) => {
-			const r = await client.call("get_fastastr", [args.selection ?? "all"]);
+			const r = await client.call("get_fastastr", [args.selection ?? "all"], {}, undefined, signal);
 			return { content: [text(String(r.value))], details: {} };
 		}),
 	});
@@ -248,7 +250,7 @@ export default function (pi: ExtensionAPI) {
 				`_b = base64.b64encode(open(${JSON.stringify(tmp)}, 'rb').read()).decode()`,
 				`os.remove(${JSON.stringify(tmp)})`,
 			].join("\n");
-			const r = await client.execCode(code, "_b", args.timeout_ms ?? (args.ray ? 300_000 : undefined));
+			const r = await client.execCode(code, "_b", args.timeout_ms ?? (args.ray ? 300_000 : undefined), signal);
 			const data = Buffer.from(String(r.value), "base64");
 			return {
 				content: [
@@ -276,10 +278,10 @@ export default function (pi: ExtensionAPI) {
 				if (args.view.length !== 18) {
 					return { content: [text("view must be exactly 18 floats")], isError: true, details: {} };
 				}
-				await client.call("set_view", [args.view], { animate: args.animate ?? 0 });
+				await client.call("set_view", [args.view], { animate: args.animate ?? 0 }, undefined, signal);
 				return { content: [text("view applied")], details: {} };
 			}
-			const r = await client.call("get_view", [], {});
+			const r = await client.call("get_view", [], {}, undefined, signal);
 			return { content: [text(JSON.stringify(r.value))], details: { view: r.value } };
 		}),
 	});
@@ -299,19 +301,19 @@ export default function (pi: ExtensionAPI) {
 			const [a, b, c, d] = args.selections;
 			switch (args.op) {
 				case "distance": {
-					const r = await client.call("get_distance", [a, b], {});
+					const r = await client.call("get_distance", [a, b], {}, undefined, signal);
 					return { content: [text(`distance ${a} <-> ${b}: ${r.value} A`)], details: { value: r.value } };
 				}
 				case "angle": {
-					const r = await client.call("get_angle", [a, b, c], {});
+					const r = await client.call("get_angle", [a, b, c], {}, undefined, signal);
 					return { content: [text(`angle ${a}, ${b}, ${c}: ${r.value} deg`)], details: { value: r.value } };
 				}
 				case "dihedral": {
-					const r = await client.call("get_dihedral", [a, b, c, d], {});
+					const r = await client.call("get_dihedral", [a, b, c, d], {}, undefined, signal);
 					return { content: [text(`dihedral: ${r.value} deg`)], details: { value: r.value } };
 				}
 				case "align": {
-					const r = await client.call("align", [a, b], {});
+					const r = await client.call("align", [a, b], {}, undefined, signal);
 					const v = r.value as number[];
 					const [rmsdRef, nRef, nCycles, rmsdInit, nInit, rawScore, nRes] = v;
 					return {
@@ -326,7 +328,7 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 				case "rms": {
-					const r = await client.call("rms_cur", [a, b], {});
+					const r = await client.call("rms_cur", [a, b], {}, undefined, signal);
 					return { content: [text(`rms ${a} vs ${b}: ${r.value} A`)], details: { value: r.value } };
 				}
 				default:
@@ -364,6 +366,7 @@ export default function (pi: ExtensionAPI) {
 					ray: (args.ray ?? true) ? 1 : 0,
 				},
 				args.timeout_ms ?? 300_000,
+				signal,
 			);
 			return { content: [text(resolved)], details: { path: resolved } };
 		}),
