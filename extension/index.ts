@@ -67,6 +67,20 @@ function consoleText(env: { console?: unknown }): string {
 	return `pymol console:\n${shown.join("\n")}${more}`;
 }
 
+/**
+ * Empty results must never look like silence: a bare "" or "null" reads as
+ * "nothing happened" and the agent guesses (2026-09-14: six consecutive
+ * empty results before a freeze — the model kept iterating blind). State
+ * completion explicitly, and point at return_expr for pymol_run.
+ */
+function outputOrNoOutput(stdout: string | undefined, isRun: boolean): string {
+	const out = (stdout ?? "").trim();
+	if (out) return out;
+	return isRun
+		? "(completed — no output; if you expected data, pass return_expr)"
+		: "(completed — no output)";
+}
+
 /** Attach console output to a tool result, if any was emitted. */
 function withConsole(
 	content: unknown[],
@@ -203,7 +217,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 		execute: withHello(async (args) => {
 			const r = await client.call("do", [args.command], {}, args.timeout_ms, signal);
-			return withConsole([text(String(r.stdout ?? ""))], r, { value: r.value });
+			return withConsole([text(outputOrNoOutput(r.stdout, false))], r, { value: r.value });
 		}),
 	});
 
@@ -219,8 +233,11 @@ export default function (pi: ExtensionAPI) {
 		}),
 		execute: withHello(async (args) => {
 			const r = await client.execCode(args.code, args.return_expr, args.timeout_ms, signal);
+			const body = [r.stdout ?? "", r.value === undefined ? "" : String(r.value)]
+				.join("\n")
+				.trim();
 			return withConsole(
-				[text([r.stdout ?? "", r.value === undefined ? "" : String(r.value)].join("\n"))],
+				[text(body || outputOrNoOutput(r.stdout, true))],
 				r,
 				{ value: r.value },
 			);
