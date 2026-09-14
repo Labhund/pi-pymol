@@ -16,6 +16,16 @@ import path from "node:path";
 
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
+/**
+ * Inter-op gap enforced by the client-side op queue. LLM agents fire tool
+ * calls in parallel as a statistical norm; PyMOL's C API tolerates that
+ * badly (2026-09-14: parallel ops killed connections, once the whole
+ * process). Serializing in the client makes parallel tool calls behave as
+ * serial ones; the small gap also gives PyMOL's executive a beat to settle
+ * deferred work between ops. Plugin-side OP_LOCK remains as defense-in-
+ * depth for any other client.
+ */
+const DEFAULT_SERIAL_GAP_MS = 25;
 const TOKEN_PATH = path.join(os.homedir(), ".config", "pi-pymol", "token");
 
 export const PROTOCOL_VERSION = 1;
@@ -66,9 +76,12 @@ export class PyMolClient {
 	private host: string;
 	private port: number | null;
 	private timeoutMs: number;
-	private sock: net.Socket | null = null;
+	private socks = new Set<net.Socket>();
 	private token: string | null = null;
 	private helloInfo: HelloInfo | null = null;
+	/** Tail of the serialized op chain — every cmd-touching op queues here. */
+	private opTail: Promise<unknown> = Promise.resolve();
+	private serialGapMs: number;
 
 	constructor(opts: { host?: string; port?: number; timeoutMs?: number } = {}) {
 		this.host = opts.host ?? "127.0.0.1";
@@ -77,6 +90,7 @@ export class PyMolClient {
 		const envPort = parsePortEnv();
 		this.port = opts.port ?? envPort ?? null;
 		this.timeoutMs = opts.timeoutMs ?? parseTimeoutEnv() ?? DEFAULT_TIMEOUT_MS;
+		this.serialGapMs = parseSerialGapEnv() ?? DEFAULT_SERIAL_GAP_MS;
 	}
 
 	get paired(): boolean {
@@ -128,8 +142,8 @@ export class PyMolClient {
 		// look healthy the instant before its 'close' event processes). Local
 		// TCP connect is ~0.1ms against PyMOL ops that take seconds; per-call
 		// sockets also let concurrent calls stop interleaving frames on one
-		// shared pipe. this.sock tracks the latest socket only so close()/
-		// unpair() can still tear it down.
+		// shared pipe. Live sockets are tracked in this.socks so close()/
+		// unpair() can still tear them all down.
 		if (this.port === null) {
 			return Promise.reject(
 				new PyMolError(
@@ -178,18 +192,24 @@ export class PyMolClient {
 				clearTimeout(timer);
 				if (settled) return;
 				settled = true;
-				this.close(); // drop any previous socket before tracking the new one
-				this.sock = sock;
+				this.socks.add(sock);
 				resolve(sock);
 			});
 		});
 	}
 
 	private close(): void {
-		if (this.sock) {
-			this.sock.destroy();
-			this.sock = null;
-		}
+		// Tear down every live socket (unpair / explicit reset). Per-call error
+		// paths must NOT come through here: with parallel calls in flight,
+		// destroying all sockets would kill the other call's connection too
+		// (2026-09-14: both calls of a parallel pair died together this way).
+		for (const s of this.socks) s.destroy();
+		this.socks.clear();
+	}
+
+	private drop(sock: net.Socket): void {
+		this.socks.delete(sock);
+		sock.destroy();
 	}
 
 	/** Best-effort interrupt on a side channel (matches Arcadia's client). */
@@ -240,7 +260,7 @@ export class PyMolClient {
 					// socket from the cache too — reusing it would silently swallow the
 					// next request (no error, no close, no timeout) and hang the session.
 					const onClose = () => {
-						this.close();
+						this.socks.delete(sock);
 						finish(
 							new PyMolError(
 								"TransportError",
@@ -257,7 +277,8 @@ export class PyMolClient {
 							expected = buffer.readUInt32BE(0);
 							buffer = buffer.subarray(4);
 							if (expected > MAX_MESSAGE_BYTES) {
-								this.close();
+								this.socks.delete(sock);
+								sock.destroy();
 								finish(new PyMolError("ResponseTooLarge", `response of ${expected} bytes exceeds cap`));
 								return;
 							}
@@ -278,7 +299,8 @@ export class PyMolClient {
 					// (2026-09-14 freeze). This one fires regardless of socket state,
 					// and drops the corpse so the next call reconnects.
 					watchdog = setTimeout(() => {
-						this.close();
+						this.socks.delete(sock);
+						sock.destroy();
 						this.bestEffortInterrupt();
 						finish(
 							new PyMolError(
@@ -292,7 +314,8 @@ export class PyMolClient {
 					// User abort (Esc / turn cancel) must break a pending call too —
 					// a hung tool call must never be un-interruptible.
 					const onAbort = () => {
-						this.close();
+						this.socks.delete(sock);
+						sock.destroy();
 						this.bestEffortInterrupt();
 						finish(
 							new PyMolError(
@@ -310,7 +333,7 @@ export class PyMolClient {
 					}
 
 					sock.once("error", (err: Error) => {
-						this.close();
+						this.socks.delete(sock);
 						finish(new PyMolError("TransportError", `socket I/O failed: ${err.message}`));
 					});
 					sock.write(body);
@@ -318,8 +341,23 @@ export class PyMolClient {
 		);
 	}
 
+	/**
+	 * Run `fn` as the only in-flight op, then leave `serialGapMs` of quiet
+	 * before the next op starts (even after a rejection — the queue must
+	 * never deadlock on a failed call). The side-channel interrupt is
+	 * deliberately NOT serialized: it must be deliverable while an op hangs.
+	 */
+	private serialize<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.opTail.then(fn, fn);
+		this.opTail = run.then(
+			() => new Promise<void>((r) => setTimeout(r, this.serialGapMs)),
+			() => new Promise<void>((r) => setTimeout(r, this.serialGapMs)),
+		);
+		return run;
+	}
+
 	private async do(request: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<Envelope> {
-		const env = await this.sendRecv(request, timeoutMs ?? this.timeoutMs, signal);
+		const env = await this.serialize(() => this.sendRecv(request, timeoutMs ?? this.timeoutMs, signal));
 		if (!env.ok) {
 			const err = env.error ?? { type: "Unknown", message: "no error detail", traceback: "" };
 			throw new PyMolError(err.type, err.message, err.traceback, env.stdout ?? "");
@@ -381,4 +419,9 @@ function parsePortEnv(): number | undefined {
 function parseTimeoutEnv(): number | undefined {
 	const v = Number(process.env.PI_PYMOL_TIMEOUT_MS);
 	return Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+function parseSerialGapEnv(): number | undefined {
+	const v = Number(process.env.PI_PYMOL_SERIAL_GAP_MS);
+	return Number.isFinite(v) && v >= 0 ? v : undefined;
 }

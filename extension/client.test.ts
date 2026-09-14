@@ -214,6 +214,33 @@ test("abort signal breaks a pending call and fires the side-channel interrupt", 
 	assert.equal(line, "INTERRUPTS 2");
 });
 
+test("parallel calls are serialized (LLM agents fire tools concurrently)", { timeout: 15_000 }, async () => {
+	// Two 200ms ops in parallel must take >= 400ms wall-clock: the client op
+	// queue must make parallel tool calls behave as serial ones (plus the
+	// inter-op gap). Under ~350ms means they ran concurrently.
+	const client = newClient(30_000);
+	const t0 = Date.now();
+	const results = await Promise.all([
+		client.call("slow", [], { duration: 0.2 }),
+		client.call("slow", [], { duration: 0.2 }),
+	]);
+	const elapsed = Date.now() - t0;
+	assert.ok(elapsed >= 350, `parallel slow ops finished in ${elapsed}ms — expected >=400ms (serialized)`);
+	assert.equal(results[0].ok, true);
+	assert.equal(results[1].ok, true);
+});
+
+test("queue survives a rejected call (no deadlock on failure)", { timeout: 15_000 }, async () => {
+	const client = newClient(30_000);
+	// op that fails must not wedge the chain for the next op
+	await assert.rejects(
+		client.execCode("raise ValueError('boom')", "None"),
+		(err: unknown) => err instanceof PyMolError && err.type === "ValueError",
+	);
+	const after = await client.call("echo", ["alive"]);
+	assert.equal(after.value, "alive");
+});
+
 test("plain transport error surfaces TransportError and fires no interrupt", { timeout: 15_000 }, async () => {
 	// A peer that accepts and immediately destroys each connection: the client
 	// must see a transport error (not a timeout), and any side-channel interrupt
