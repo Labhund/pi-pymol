@@ -55,7 +55,6 @@ import socket
 import struct
 import threading
 import time
-from collections import deque
 import traceback
 from contextlib import redirect_stdout, suppress
 from pathlib import Path
@@ -388,48 +387,26 @@ def _handle_exec(request: dict[str, Any]) -> dict[str, Any]:
     return _run_capturing(thunk)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSOLE CAPTURE (PyMOL GUI feedback → agent)
-#
-# PyMOL routes command echo and C-layer info/error lines to the GUI console
-# via its feedback buffer; the GUI polls cmd._get_feedback() on a timer. The
-# buffer is unreachable from a worker thread mid-op (lock contention returns
-# None), and deferred lines may be emitted after the op returns — so a
-# background poller thread does the GUI's job into a ring buffer, and every
-# op drains that ring into its response envelope. Without it the agent sees
-# empty stdout while the GUI console holds the diagnosis (2026-09-14).
-# ─────────────────────────────────────────────────────────────────────────────
+def _drain_console() -> list[str]:
+    """
+    Drain PyMOL's GUI-feedback queue (what the console widget is built from)
+    into the response envelope. Empirically a near no-op on PyMOL 3.1 GUI:
+    worker-thread op output never reaches the pollable queue (verified live,
+    200+ polls with feedback masks fully enabled — only user-typed commands
+    reach the console), so agent error visibility rests on the stdout capture
+    and exception envelopes, which carry everything observed. Kept as a
+    contract: if PyMOL ever feeds the queue, lines flow with no further work.
+    Best-effort; never masks the op result.
+    """
+    try:
+        from pymol import cmd
 
-_console_ring: deque[str] = deque(maxlen=500)
-_console_poll_stop = threading.Event()
-_console_poller_thread: threading.Thread | None = None
-
-# The GUI's own 500 ms poll competes for lines when the executive is idle;
-# partial capture is still strictly better than none, in GUI mode.
-_CONSOLE_POLL_INTERVAL = 0.2
-
-
-def _console_poll_loop() -> None:
-    while not _console_poll_stop.is_set():
-        try:
-            from pymol import cmd
-
-            fb = cmd._get_feedback()
-            if fb:
-                _console_ring.extend(str(line) for line in fb)
-        except Exception:
-            pass  # capture must never break the bridge
-        time.sleep(_CONSOLE_POLL_INTERVAL)
-
-
-def _start_console_poller() -> None:
-    global _console_poller_thread
-    if _console_poller_thread is not None and _console_poller_thread.is_alive():
-        return
-    _console_poller_thread = threading.Thread(
-        target=_console_poll_loop, daemon=True, name="pi-pymol-console-poll"
-    )
-    _console_poller_thread.start()
+        fb = cmd._get_feedback()
+        if fb:
+            return [str(line) for line in fb][-200:]
+    except Exception:
+        pass
+    return []
 
 
 def _run_capturing(thunk) -> dict[str, Any]:
@@ -453,24 +430,6 @@ def _run_capturing(thunk) -> dict[str, Any]:
         "stdout": buffer.getvalue(),
         "console": _drain_console(),
     }
-
-
-def _drain_console() -> list[str]:
-    """Everything console-visible since the last op: the poller's ring plus
-    whatever is still directly drainable. Best-effort; never masks the result."""
-    lines: list[str] = []
-    try:
-        from pymol import cmd
-
-        fb = cmd._get_feedback()
-        if fb:
-            _console_ring.extend(str(line) for line in fb)
-    except Exception:
-        pass
-    if _console_ring:
-        lines = list(_console_ring)
-        _console_ring.clear()
-    return lines[-200:]  # bounded: a chatty op must not flood the frame
 
 
 def _error_response(error_type: str, message: str, tb: str, stdout: str) -> dict[str, Any]:
@@ -497,7 +456,6 @@ class SocketServer:
     def start(self) -> bool:
         if self.running:
             return False
-        _start_console_poller()
         get_token()
         # Bind synchronously so callers can read getsockname() immediately
         # after start() returns (the accept loop still runs in the thread).
