@@ -5,7 +5,7 @@
 #                     pi_pymol_start remote   (over Tailscale; Tailscale
 #                     required on both machines)
 #   then run /pymol in the pi session and paste the printed line.
-# Version: 0.1.3
+# Version: 0.2.1
 # Author: Loo Lab (fork of Arcadia-Science/agentic-pymol, MIT)
 # License: MIT
 # pyright: reportMissingImports=false
@@ -69,7 +69,7 @@ LENGTH_HEADER = struct.Struct(">I")
 
 TOKEN_PATH = Path.home() / ".config" / "pi-pymol" / "token"
 PROTOCOL_VERSION = 1
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.2.1"
 TOKEN_BYTES = 32
 
 ITERATE_ROW_LIMIT = 200_000
@@ -584,22 +584,38 @@ def _remove_session_file(port: int) -> None:
 # CONSOLE COMMANDS (explicit pairing; pi_pymol_start binds a random free port)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_tailnet_ip(ip: str) -> bool:
+    """True when `ip` parses and falls in the Tailscale CGNAT range."""
+    import ipaddress
+    try:
+        return ipaddress.ip_address(ip) in ipaddress.ip_network("100.64.0.0/10")
+    except ValueError:
+        return False
+
+
 def _detect_remote_ip() -> str:
     """The machine's tailnet IPv4. Refuses when Tailscale is down or absent
     rather than binding whatever public IP exists — a confident connect line
-    for an unroutable address wasted a debugging session (2026-09-03)."""
+    for an unroutable address wasted a debugging session (2026-09-03), and
+    on a macOS GUI install the route probe can answer with the en0 LAN IP
+    when magic-DNS UDP is filtered, so every candidate is validated against
+    the CGNAT range (2026-09-15)."""
     import subprocess
-    try:
-        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)
+    for cli in ("tailscale",
+                "/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+        try:
+            out = subprocess.run([cli, "ip", "-4"], capture_output=True, text=True, timeout=5)
+        except OSError:
+            continue  # not on PATH (GUI-only macOS install) or not installed
+        except subprocess.TimeoutExpired:
+            continue
         ip = out.stdout.strip().splitlines()[0].strip() if out.returncode == 0 else ""
-        if ip:
+        if _is_tailnet_ip(ip):
             return ip
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass  # GUI-only Tailscale installs have no CLI; probe the route next
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("100.100.100.100", 0))  # tailscale magic DNS; no packets sent
-        return s.getsockname()[0]
+        ip = s.getsockname()[0]
     except OSError:
         raise RuntimeError(
             "Tailscale is not connected on this machine "
@@ -608,6 +624,14 @@ def _detect_remote_ip() -> str:
         )
     finally:
         s.close()
+    if not _is_tailnet_ip(ip):
+        raise RuntimeError(
+            f"Tailscale route probe returned {ip}, which is not a tailnet "
+            "address (100.64.0.0/10) — the probe went out a physical "
+            "interface instead. Start Tailscale, or pass an explicit "
+            "host=<ip> to pi_pymol_start."
+        )
+    return ip
 
 
 def pi_pymol_start(port: int = 0, host: str = "") -> None:
