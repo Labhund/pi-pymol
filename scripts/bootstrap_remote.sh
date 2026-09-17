@@ -3,10 +3,15 @@
 # plugin so every PyMOL session can expose itself with `pi_pymol_start
 # remote`. Run from a terminal:
 #
-#   curl -fsSL https://raw.githubusercontent.com/Labhund/pi-pymol/v0.1.2/scripts/bootstrap_remote.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Labhund/pi-pymol/main/scripts/bootstrap_remote.sh | sh
 #
+# Fetching from main (not a release tag) by default: the script used to pin
+# v0.1.2, and re-running it on a Mac that already had a Plugin-Manager zip
+# install silently put a 0.1.0 copy in ~/.pymol.d — .pymolrc runs after
+# plugins load, so the stale copy's console commands shadowed the good ones
+# and remote detection regressed to the LAN-IP bug (2026-09-18).
 set -eu
-VERSION="${PI_PYMOL_VERSION:-v0.1.2}"
+VERSION="${PI_PYMOL_VERSION:-main}"
 DIR="$HOME/.pymol.d"
 mkdir -p "$DIR"
 curl -fsSL "https://raw.githubusercontent.com/Labhund/pi-pymol/$VERSION/plugin/__init__.py" -o "$DIR/pi-pymol-plugin.py"
