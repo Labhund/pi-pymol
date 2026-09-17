@@ -62,7 +62,7 @@ def test_hello_reports_protocol_and_versions(running_plugin: tuple[str, int]) ->
     assert response["ok"] is True
     value = response["value"]
     assert value["protocol"] == 1
-    assert value["plugin_version"] == "0.2.1"
+    assert value["plugin_version"] == "0.2.2"
     assert value["pymol_version"] == FAKE_PYMOL_VERSION
 
 

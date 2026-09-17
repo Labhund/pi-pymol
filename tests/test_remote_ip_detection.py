@@ -7,6 +7,7 @@ the en0 address when magic-DNS UDP was filtered (2026-09-15).
 
 from __future__ import annotations
 
+import types
 from typing import Any
 
 import pytest
@@ -71,10 +72,46 @@ class TestDetectRemoteIp:
                 pass
 
         monkeypatch.setattr(plugin_module.socket, "socket", lambda *a: FakeSocket())
-        with pytest.raises(RuntimeError, match="not a tailnet address"):
+        # The dev machine may hold a real tailnet interface; pretend none exists.
+        monkeypatch.setattr(plugin_module, "_tailnet_ip_from_interfaces", lambda: "")
+        with pytest.raises(RuntimeError, match="Could not detect a tailnet address"):
             plugin_module._detect_remote_ip()
 
-    def test_no_cli_no_route_raises(self, plugin_module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_interface_fallback_rescues_dead_probe(self, plugin_module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        # No CLI, probe errors outright (the 2026-09-18 Mac), but ifconfig
+        # shows the utun tailnet address.
+        import subprocess as subprocess_mod
+
+        calls: list[list[str]] = []
+
+        def fake_run(argv: list[str], **kw: Any) -> Any:
+            calls.append(argv)
+            if argv[0] == "ifconfig":
+                out = types.SimpleNamespace()
+                out.returncode = 0
+                out.stdout = (
+                    "en0: flags=8863<UP> mtu 1500\n"
+                    "\tinet 10.136.108.249 netmask 0xffff0000 broadcast 10.136.255.255\n"
+                    "utun4: flags=8051<UP> mtu 1380\n"
+                    "\tinet 100.94.211.125 --> 100.94.211.125 netmask 0xff800000\n"
+                )
+                return out
+            raise FileNotFoundError(argv[0])
+
+        monkeypatch.setattr(subprocess_mod, "run", fake_run)
+
+        class DeadSocket:
+            def connect(self, addr: Any) -> None:
+                raise OSError("no route")
+
+            def close(self) -> None:
+                pass
+
+        monkeypatch.setattr(plugin_module.socket, "socket", lambda *a: DeadSocket())
+        assert plugin_module._detect_remote_ip() == "100.94.211.125"
+        assert any(c[0] == "ifconfig" for c in calls)
+
+    def test_no_cli_no_route_no_interface_raises(self, plugin_module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         import subprocess as subprocess_mod
 
         def no_cli(argv: list[str], **kw: Any) -> Any:
@@ -90,5 +127,6 @@ class TestDetectRemoteIp:
                 pass
 
         monkeypatch.setattr(plugin_module.socket, "socket", lambda *a: DeadSocket())
-        with pytest.raises(RuntimeError, match="Tailscale is not connected"):
+        monkeypatch.setattr(plugin_module, "_tailnet_ip_from_interfaces", lambda: "")
+        with pytest.raises(RuntimeError, match="Could not detect a tailnet address"):
             plugin_module._detect_remote_ip()
